@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Local web workstation backend for subtitle generation and editing."
 requires-python = ">=3.11"
 dependencies = [
+  "deep-translator>=1.11.4",
   "fastapi>=0.111.0",
   "pydantic-settings>=2.2.1",
   "sqlalchemy>=2.0.30",
