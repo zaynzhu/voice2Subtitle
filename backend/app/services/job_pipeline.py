@@ -95,7 +95,7 @@ def run_processing_pipeline(session: Session, media_item: MediaItem) -> Pipeline
         session.flush()
 
         # 4. 字幕翻译
-        print(f"[DEBUG] 步骤 4: 正在启动字幕翻译，源语言: {media_item.source_language} ➜ 目标语言: {media_item.target_language}...", flush=True)
+        print(f"[DEBUG] 步骤 4: 正在启动字幕翻译，源语言: {media_item.source_language} -> 目标语言: {media_item.target_language}...", flush=True)
         add_job_log(session, job, "info", f"Starting translation from {media_item.source_language} to {media_item.target_language}")
         job.stage = "translating"
         media_item.status = "translating"
