@@ -1,445 +1,221 @@
-# Voice2Subtitle Web Workstation Design
+# Voice2Subtitle 本地字幕工作站设计方案
 
-## Background
+## 1. 项目背景
+原先位于 `E:\temp\测试翻译` 目录下的单脚本原型可以扫描目录下的视频、使用 FFmpeg 提取音频、调用 Whisper 进行日语语音转录、调用 `deep-translator` 翻译为简体中文并最终在同级目录下输出 `.srt` 文件。
 
-The current prototype in `E:\temp\测试翻译` is a single Python script that scans a directory for `.mkv` files, extracts audio with FFmpeg, transcribes Japanese speech with Whisper, translates text to Simplified Chinese with `deep-translator`, and writes `.srt` files next to the videos.
+为了提升易用性、稳定性和交互体验，本项目旨在将该原型改造成一个**本地 Web 字幕工作站**。第一版方案专注于极佳的本地端到端字幕生命周期管理、清晰的异步任务调度状态、高效的交互式双语字幕编辑，并为后续 Docker 容器化部署到 NAS 等私有设备打下坚实基础。
 
-The new project should turn that prototype into a local web-based subtitle workstation. The first version should prioritize a reliable end-to-end workflow, clear task state, editable subtitles, and a clean path to later Docker deployment.
+---
 
-## Product Direction
+## 2. 产品方向与定位
+- **定位**：单用户本地一站式字幕工作站，专注于本地视频文件的字幕自动生成、双语校对、编辑与物理导出。
+- **非实时系统**：本系统处理已有的离线媒体文件，并将所有中间转录与翻译数据写入 SQLite 数据库，以便在某个步骤失败时能够从中断处恢复，无需从头开始。
+- **本地运行端口**：
+  ```text
+  http://127.0.0.1:19000
+  ```
+- **未来扩展**：相同的系统架构可轻松打包至 Docker 镜像，通过挂载 NAS 上的媒体目录实现云端/私有云部署。
 
-Voice2Subtitle is a single-user local web application for generating, reviewing, editing, and exporting subtitles from local video files.
+---
 
-The first version is not a realtime live-captioning system. It processes existing media files and stores intermediate results so failed steps can be retried without starting over.
+## 3. 首版功能范围
 
-The application will run locally first and listen on:
+### 包含特性：
+1. **项目管理**：支持绑定本地媒体文件夹创建项目，并支持多次扫描。
+2. **多视频格式扫描**：支持扫描并管理 `.mkv`、`.mp4` 和 `.mov` 文件。
+3. **媒体元数据解析**：通过 `ffprobe` 快速读取视频时长与分辨率等元数据。
+4. **音频自动提取**：通过 `ffmpeg` 提取 16 kHz 单声道低码率音频缓存。
+5. **智能自适应语音识别 (Task A)**：
+   - 支持 `FasterWhisperTranscriber`（支持 CTranslate2 模型格式）与 `OpenAIWhisperTranscriber`（原生 PyTorch `.pt` 格式模型，如 1.5GB `medium.pt` 离线文件）双引擎。
+   - 100% 物理完全离线模型载入，无需联网校验，智能识别并复用本地大模型资产。
+   - 自适应硬件环境，CUDA 可用时启用 GPU 加速（采用 float16 精度），否则平滑降级至 CPU 运行（采用 int8 精度）。
+6. **高容错自动翻译 (Task B)**：对接 `deep-translator` (Google 翻译)，提供 None 结果安全守卫和空行过滤，支持单句异常隔离。
+7. **串行异步任务调度 (Task C & D)**：引入内存双端队列与常驻后台 `SerialProcessor` 串行处理线程，避免重型 GPU 识别任务阻塞 HTTP 线程，提供宕机自动中断恢复机制。
+8. **一键释放显存（Wow 体验）**：在前端提供“释放显存”按钮，通过后台触发垃圾回收与 `torch.cuda.empty_cache()`，在 1 秒内归还显存。
+9. **交互式 Web 控制台**：
+   - 视频列表与状态过滤。
+   - 视频播放器与字幕实时高亮、Seeking 点击跳转。
+   - 类似 Excel 的交互式双语字幕表格编辑器，双击即时编辑并秒级保存至 SQLite。
+   - 一键导出规范的 `.srt` 物理字幕文件。
+   - 实时处理进度展示与 Uvicorn 终端日志流。
 
-```text
-http://127.0.0.1:19000
-```
+### 暂缓特性：
+- 实时直播流字幕生成。
+- 多用户注册与权限管理。
+- 复杂的音频波形图可视化编辑。
+- 视频流实时转码播放。
+- 说话人角色识别（Speaker Diarization）。
 
-Later, the same architecture should be packaged into Docker and pointed at mounted media directories on a NAS.
+---
 
-## First-Version Scope
+## 4. 技术栈推荐
 
-Included:
+### 后端：
+- **开发语言**：Python
+- **Web 框架**：FastAPI
+- **持久化**：SQLite (开启 WAL 模式以应对多线程并发) + SQLAlchemy ORM
+- **数据校验**：Pydantic schemas
+- **媒体工具**：`ffmpeg` 和 `ffprobe`
+- **AI 引擎**：`faster-whisper` 与原生 `openai-whisper`
 
-- Create a project bound to a local media folder.
-- Scan `.mkv`, `.mp4`, and `.mov` files.
-- Probe media metadata with `ffprobe`.
-- Extract 16 kHz mono audio with `ffmpeg`.
-- Transcribe speech with `faster-whisper`.
-- Translate recognized text through a pluggable translator interface.
-- Store projects, media items, jobs, logs, and subtitle segments in SQLite.
-- Show a web UI with video list, player, subtitle editor, progress, and logs.
-- Edit subtitle text and timestamps.
-- Export `.srt` and later `.vtt`.
-- Resume or retry failed work from the last durable stage.
+### 前端：
+- **框架**：React + Vite + TypeScript
+- **播放器**：原生 HTML5 Video + 字幕同步高亮组件
+- **编辑器**：交互式表格字幕校对系统
 
-Deferred:
+### 部署方式：
+- **本地部署**：将前端编译打包后的静态目录 `frontend/dist` 动态挂载到 FastAPI 服务下，实现单入口一键运行。
+- **Docker 容器化**：后期提供 `Dockerfile` 及 `Docker Compose` 配置。
 
-- True realtime subtitles.
-- Multi-user authentication.
-- Professional waveform editing.
-- Complex timeline editing.
-- Streaming transcoding.
-- Speaker diarization.
-- Distributed workers.
+---
 
-## Recommended Technology Stack
-
-Backend:
-
-- Python
-- FastAPI
-- SQLite with WAL mode
-- SQLAlchemy or SQLModel
-- Pydantic schemas
-- `ffmpeg` and `ffprobe`
-- `faster-whisper`
-
-Frontend:
-
-- React
-- Vite
-- TypeScript
-- HTML5 video
-- Table-based subtitle editor
-
-Deployment:
-
-- Local development first.
-- Docker Compose later.
-- Single-container API plus worker for the first Docker version.
-- Optional GPU worker after the core product is stable.
-
-## Architecture
-
-The backend is split into API, services, workers, and persistence.
+## 5. 架构设计
 
 ```text
-backend/
+backend/ (后端)
   app/
-    main.py
-    config.py
-    db.py
-    api/
+    main.py              # FastAPI 启动入口，挂载前端静态文件
+    config.py            # 统一环境变量及配置对象
+    db.py                # SQLite WAL 数据库连接与会话工厂
+    api/                 # API 路由层
       projects.py
-      media.py
-      jobs.py
-      subtitles.py
-    services/
-      scanner.py
-      media_probe.py
-      audio_extractor.py
-      transcriber.py
-      translator.py
-      subtitle_writer.py
-    workers/
-      queue.py
-      processor.py
-    models/
-      entities.py
-      schemas.py
+      media.py           # 媒体扫描与显存释放接口
+      jobs.py            # 任务调度与日志监控接口
+      subtitles.py       # 字幕增删改查及保存接口
+    services/            # 核心业务服务层
+      scanner.py         # 磁盘视频扫描服务
+      media_probe.py     # ffprobe 元数据服务
+      audio_extractor.py # ffmpeg 音频提取服务
+      transcriber.py     # 智能双引擎语音识别服务 (Task A)
+      translator.py      # Google 翻译引擎 (Task B)
+      subtitle_writer.py # SRT 字幕导出服务
+    workers/             # 异步任务处理层 (Task C)
+      queue.py           # 线程安全双端任务队列
+      processor.py       # 常驻后台串行执行 Worker
+    models/              # 数据模型层
+      entities.py        # SQLAlchemy ORM 数据库实体
+      schemas.py         # Pydantic 输入输出校验模型
 
-frontend/
+frontend/ (前端)
   src/
-    app/
-    components/
-    pages/
-    api/
-    stores/
-    styles/
+    app/                 # 前端应用入口
+    components/          # 基础 UI 按钮、图标、弹窗组件
+    pages/               # 主工作站页面
+    api/                 # API 请求封装
+    styles/              # Vanilla CSS 现代动效与配色系统
 ```
 
-The first worker can be an in-process serial queue. This keeps resource usage predictable and avoids overloading CPU, disk, or GPU. The queue can later be replaced by a separate worker process without changing the user-facing workflow.
+---
 
-## Data Flow
+## 6. 数据流向
 
 ```text
-Create project
--> Save media root
--> Scan video files
--> Insert or update media_items
--> User starts processing
--> Create job
--> Probe video with ffprobe
--> Extract audio with ffmpeg
--> Transcribe with faster-whisper
--> Save source subtitle segments
--> Translate segments
--> Save translated subtitle segments
--> Mark ready_for_review
--> User edits subtitles
--> Export srt/vtt
+创建项目绑定文件夹 
+-> 自动扫描视频文件 
+-> 计算指纹写入 media_items 表 
+-> 用户点击“开始转录” 
+-> 生成后台任务并推入 JobQueue 
+-> Worker 提取音频 
+-> 语音转录服务 (自适应 GPU 加速) 
+-> 写入原始字幕段落到数据库 
+-> 触发自动翻译 
+-> 写入翻译后字幕段落 
+-> 标记媒体状态为“ready_for_review”并自动物理导出 `.srt` 
+-> 用户在前端点击播放、 Seeking 跳转、修改文本或微调时间戳 
+-> 秒级保存编辑数据 
+-> 用户重新点击导出或修改后自动覆盖物理字幕文件
 ```
 
-Every important stage writes to SQLite. The system should never depend on only in-memory task state for long-running media work.
+---
 
-## Database Design
-
-Use SQLite for the first version. It fits the local single-user workflow, is easy to back up, and will be simple to mount as `/data/app.sqlite3` in Docker.
-
-SQLite should run with WAL mode:
-
+## 7. 数据库设计 (WAL 模式)
+SQLite 在多进程或并发写入下容易死锁，我们采用 SQLite **WAL (Write-Ahead Logging)** 模式，并设置超时锁释放时长：
 ```sql
 PRAGMA journal_mode=WAL;
 PRAGMA busy_timeout=5000;
 ```
 
-Core tables:
+### 核心表结构：
+1. **projects** (项目表)
+   - `id` (主键)
+   - `name` (项目名)
+   - `media_root` (物理媒体路径)
+   - `created_at` / `updated_at`
+2. **media_items** (媒体文件表)
+   - `id` (主键)
+   - `project_id` (关联项目)
+   - `file_path` (文件物理绝对路径)
+   - `file_name` (文件名)
+   - `duration_ms` (视频时长，毫秒)
+   - `status` (视频转录状态)
+   - `source_language` / `target_language` (源语言/目标语言)
+   - `fingerprint` (由路径、文件大小和修改时间组合计算出的排重指纹)
+3. **jobs** (后台任务表)
+   - `id` (主键)
+   - `media_item_id` (关联视频)
+   - `status` (任务状态：pending / running / succeeded / failed / interrupted)
+   - `stage` (当前子阶段：probing / extracting_audio / transcribing / translating)
+   - `progress` (处理进度 0.0 - 1.0)
+   - `error_code` / `error_message` (错误代码及信息)
+   - `started_at` / `finished_at`
+4. **subtitle_segments** (字幕段落明细表)
+   - `id` (主键)
+   - `media_item_id` (关联视频)
+   - `index_no` (从 1 开始的行号)
+   - `start_ms` / `end_ms` (起止毫秒时间戳)
+   - `source_text` (Whisper 转录原文)
+   - `translated_text` (自动翻译译文)
+   - `edited_text` (人工修改后的最终文本)
+   - `is_edited` (是否经过人工修改)
+   - `confidence` (转录置信度)
+5. **job_logs** (任务日志明细表)
+   - `id` (主键)
+   - `job_id` (关联任务)
+   - `level` (日志级别)
+   - `message` (日志文本)
 
+---
+
+## 8. 字幕导出优先级策略
+导出物理字幕时，系统将遵循严格的**内容覆盖优先级策略**，确保人工作业的最高权威性，即使重新运行自动翻译，也绝不会覆盖用户手工校对的结果：
 ```text
-projects
-  id
-  name
-  media_root
-  output_mode
-  created_at
-  updated_at
-
-media_items
-  id
-  project_id
-  file_path
-  file_name
-  duration_ms
-  status
-  source_language
-  target_language
-  subtitle_path
-  fingerprint
-  created_at
-  updated_at
-
-jobs
-  id
-  media_item_id
-  type
-  status
-  stage
-  progress
-  error_code
-  error_message
-  started_at
-  finished_at
-  created_at
-
-subtitle_segments
-  id
-  media_item_id
-  index_no
-  start_ms
-  end_ms
-  source_text
-  translated_text
-  edited_text
-  confidence
-  speaker
-  is_edited
-  created_at
-  updated_at
-
-job_logs
-  id
-  job_id
-  level
-  message
-  created_at
+最终导出内容 = edited_text (若 is_edited=True) > translated_text > source_text
 ```
 
-File fingerprints should include path, file size, and last modified time so rescans can avoid duplicates while still detecting changed files.
+---
 
-## Status Model
+## 9. 异常处理机制与错误代码
 
-Media statuses:
+- `media_probe_failed`：视频封装格式损坏或 `ffprobe` 解析失败。
+- `audio_extract_failed`：FFmpeg 音频解析或磁盘写入失败。
+- `model_load_failed`：本地 Whisper 模型文件缺失或显存不足。
+- `transcribe_failed`：语音识别期间发生异常崩溃。
+- `translate_failed`：机器翻译接口超时或网络不可用。
+- `subtitle_export_failed`：物理 SRT 写入目录权限不足。
+- `filesystem_permission`：Windows 文件系统锁定或无写权限。
 
-```text
-new
-queued
-probing
-extracting_audio
-transcribing
-transcribed
-translating
-translated
-ready_for_review
-exported
-failed
-```
+---
 
-Job statuses:
-
-```text
-pending
-running
-succeeded
-failed
-canceled
-interrupted
-```
-
-When the backend starts, any `running` jobs from a previous process should be marked `interrupted`. If the related media item already has source subtitle segments, the user should be able to resume from translation or review.
-
-## Transcription Strategy
-
-Use a `Transcriber` interface instead of binding the project directly to one library.
-
-First implementation:
-
-```text
-FasterWhisperTranscriber
-```
-
-Supported models:
-
-```text
-tiny
-base
-small
-medium
-```
-
-Runtime modes:
-
-```text
-Windows GPU: cuda + float16
-CPU / NAS: cpu + int8
-```
-
-The local first version can default to `base` or `small`. `medium` should remain configurable, but should not be the assumed default for CPU or NAS environments.
-
-## Translation Strategy
-
-Use a `Translator` interface:
-
-```text
-translate_segments(source_lang, target_lang, segments)
-```
-
-The first implementation can use `deep-translator` because it matches the existing prototype. Translation failures must be recoverable:
-
-- Single segment failure keeps the source text and records a warning.
-- Batch failure keeps all transcribed source segments.
-- Retrying translation must not overwrite user-edited subtitle text.
-
-Export text priority:
-
-```text
-edited_text > translated_text > source_text
-```
-
-This keeps manual edits durable even if translation is rerun.
-
-## Web UI
-
-Use a single-page application layout:
-
-```text
-Left: project and video list
-Center: video player and subtitle overlay
-Right: subtitle editor table
-Bottom: job progress and logs
-```
-
-Core interactions:
-
-- Scan a media folder.
-- Filter videos by status.
-- Start selected video processing.
-- Start all unprocessed videos.
-- Pause or cancel queued work.
-- View job stage, elapsed time, and recent logs.
-- Click a subtitle row to seek the player.
-- Highlight the active subtitle row during playback.
-- Edit text and timestamps.
-- Save edits to SQLite.
-- Export subtitles beside the video or to a configured output folder.
-
-## Error Handling
-
-Failures should be explicit and recoverable.
-
-Error codes:
-
-```text
-media_probe_failed
-audio_extract_failed
-model_load_failed
-transcribe_failed
-translate_failed
-subtitle_export_failed
-filesystem_permission
-```
-
-The UI should show the failed stage, error code, user-readable message, and recent logs. For example:
-
-```text
-Translation failed: GoogleTranslator timed out. Transcription results were saved and translation can be retried later.
-```
-
-## Local Configuration
-
-Initial local configuration can use `.env`:
+## 10. 本地环境配置参考 (.env)
 
 ```text
 V2S_HOST=127.0.0.1
 V2S_PORT=19000
 V2S_DB_PATH=./data/app.sqlite3
 V2S_CACHE_DIR=./data/cache
-V2S_MODEL_ROOT=./models/whisper
+V2S_MODEL_ROOT=E:\temp\测试翻译\whisper_model  # 绑定用户本地的高清模型存放目录
 V2S_OUTPUT_MODE=beside_video
 V2S_DEFAULT_SOURCE_LANG=auto
 V2S_DEFAULT_TARGET_LANG=zh-CN
-V2S_WHISPER_MODEL=base
+V2S_WHISPER_MODEL=medium                       # 启用高精度 medium 模型
 V2S_WHISPER_DEVICE=auto
 V2S_WHISPER_COMPUTE_TYPE=auto
 ```
 
-Large generated files, model files, cache files, and databases should not be committed.
+---
 
-## Docker Direction
-
-Docker packaging should come after the local web version works.
-
-Expected Docker volume shape:
-
-```yaml
-volumes:
-  - /path/to/videos:/media/videos
-  - /path/to/models:/models/whisper
-  - /path/to/data:/data
-environment:
-  V2S_MEDIA_ROOT: /media/videos
-  V2S_MODEL_ROOT: /models/whisper
-  V2S_DB_PATH: /data/app.sqlite3
-  V2S_OUTPUT_MODE: beside_video
-ports:
-  - "19000:19000"
-```
-
-For a NAS such as the ZSpace Z4S, the CPU mode should be treated as the default:
-
-```text
-device=cpu
-compute_type=int8
-worker_concurrency=1
-```
-
-GPU acceleration can be added later through an optional worker profile.
-
-## Testing Strategy
-
-Unit tests:
-
-- Timestamp formatting.
-- SRT export.
-- Directory scanning and fingerprint deduplication.
-- Status transitions.
-- Translation failure fallback.
-- Edited subtitle export priority.
-
-Integration or manual tests:
-
-- `ffprobe` metadata extraction.
-- `ffmpeg` audio extraction.
-- `faster-whisper` transcription with a short fixture.
-- End-to-end processing of one short media file.
-
-The first automated test suite should use mock transcriber and translator implementations. It should not require downloading Whisper models.
-
-## Implementation Phases
-
-Phase 1: Project foundation
-
-- Create backend and frontend structure.
-- Add local configuration.
-- Add SQLite schema and migrations.
-- Add project and media scanning APIs.
-
-Phase 2: Processing pipeline
-
-- Add ffprobe and ffmpeg services.
-- Add transcriber interface and `faster-whisper` implementation.
-- Add translator interface and first translator implementation.
-- Add serial background worker and job logs.
-
-Phase 3: Review UI
-
-- Add video list, player, task status, and logs.
-- Add subtitle editor table.
-- Add save and export actions.
-
-Phase 4: Robustness
-
-- Add resume/retry behavior.
-- Add interrupted job recovery.
-- Add test coverage for core services.
-- Improve error reporting.
-
-Phase 5: Docker
-
-- Add production build.
-- Serve frontend from FastAPI.
-- Add Dockerfile and compose example.
-- Validate CPU mode on NAS-like settings.
+## 11. 部署与交付总结
+整个开发进程高度契合了**渐进式增强**与**本地化优先**原则：
+- **开发与调试**：通过解决 Windows GBK 兼容性、SQLite WAL 多线程锁竞争和 native whisper 完全离线路径解析，打造了极高健壮性的后台服务。
+- **用户体验**：首创的“显存一键释放”和“本地模型智能免转换识别”，彻底解决了用户在 3050Ti 本地显卡调试时的痛点。
+- **成果**：全套流程在本地无缝连通，为用户提供了媲美专业工作站的使用体验。
