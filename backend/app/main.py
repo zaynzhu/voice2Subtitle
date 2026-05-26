@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import health, media, projects, subtitles
+from app.api import exports, health, jobs, media, projects, subtitle_edits, subtitles
 from app.db import init_db
 
 
@@ -24,6 +24,9 @@ def create_app() -> FastAPI:
     app.include_router(projects.router)
     app.include_router(media.router)
     app.include_router(subtitles.router)
+    app.include_router(subtitle_edits.router)
+    app.include_router(jobs.router)
+    app.include_router(exports.router)
     return app
 
 

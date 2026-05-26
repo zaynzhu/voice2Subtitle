@@ -4,10 +4,13 @@ import { Captions, FolderSearch, Play, RefreshCw, Save, Settings, Wand2 } from "
 
 import {
   createProject,
+  exportMedia,
   listMedia,
   listProjects,
   listSubtitles,
+  processMedia,
   scanProject,
+  updateSubtitle,
   type MediaItem,
   type Project,
   type SubtitleSegment
@@ -42,12 +45,21 @@ function App() {
   const [mediaItems, setMediaItems] = useState<MediaItem[]>([]);
   const [activeMedia, setActiveMedia] = useState<MediaItem | null>(null);
   const [subtitles, setSubtitles] = useState<SubtitleSegment[]>([]);
+  const [selectedSubtitleId, setSelectedSubtitleId] = useState<number | null>(null);
+  const [editSourceText, setEditSourceText] = useState("");
+  const [editTranslatedText, setEditTranslatedText] = useState("");
+  const [editEditedText, setEditEditedText] = useState("");
+  const [editStartMs, setEditStartMs] = useState("0");
+  const [editEndMs, setEditEndMs] = useState("0");
   const [projectName, setProjectName] = useState("本地字幕项目");
   const [mediaRoot, setMediaRoot] = useState("");
   const [logLines, setLogLines] = useState<string[]>(["等待连接后端。"]);
   const [busy, setBusy] = useState(false);
 
-  const selectedSubtitle = useMemo(() => subtitles[0], [subtitles]);
+  const selectedSubtitle = useMemo(
+    () => subtitles.find((segment) => segment.id === selectedSubtitleId) ?? subtitles[0] ?? null,
+    [subtitles, selectedSubtitleId]
+  );
 
   function appendLog(line: string) {
     setLogLines((current) => [line, ...current].slice(0, 10));
@@ -79,12 +91,25 @@ function App() {
   useEffect(() => {
     if (!activeMedia) {
       setSubtitles([]);
+      setSelectedSubtitleId(null);
       return;
     }
     listSubtitles(activeMedia.id)
-      .then(setSubtitles)
+      .then((nextSubtitles) => {
+        setSubtitles(nextSubtitles);
+        setSelectedSubtitleId(nextSubtitles[0]?.id ?? null);
+      })
       .catch((error) => appendLog(`读取字幕失败：${error.message}`));
   }, [activeMedia?.id]);
+
+  useEffect(() => {
+    if (!selectedSubtitle) return;
+    setEditSourceText(selectedSubtitle.source_text);
+    setEditTranslatedText(selectedSubtitle.translated_text);
+    setEditEditedText(selectedSubtitle.edited_text);
+    setEditStartMs(String(selectedSubtitle.start_ms));
+    setEditEndMs(String(selectedSubtitle.end_ms));
+  }, [selectedSubtitle?.id]);
 
   async function handleCreateProject() {
     if (!mediaRoot.trim()) {
@@ -120,6 +145,59 @@ function App() {
       await refreshMedia(activeProject);
     } catch (error) {
       appendLog(`扫描失败：${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleProcess() {
+    if (!activeMedia) return;
+    setBusy(true);
+    try {
+      const result = await processMedia(activeMedia.id);
+      appendLog(`已发起处理任务：#${result.job_id}，阶段 ${result.stage}。`);
+    } catch (error) {
+      appendLog(`处理失败：${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleExport() {
+    if (!activeMedia) return;
+    setBusy(true);
+    try {
+      const result = await exportMedia(activeMedia.id);
+      appendLog(`已导出字幕：${result.subtitle_path}`);
+      if (activeProject) {
+        await refreshMedia(activeProject);
+      }
+    } catch (error) {
+      appendLog(`导出失败：${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleSaveSubtitle() {
+    if (!selectedSubtitle) return;
+    setBusy(true);
+    try {
+      await updateSubtitle(selectedSubtitle.id, {
+        source_text: editSourceText,
+        translated_text: editTranslatedText,
+        edited_text: editEditedText,
+        start_ms: Number(editStartMs),
+        end_ms: Number(editEndMs)
+      });
+      appendLog(`字幕段 #${selectedSubtitle.index_no} 已保存。`);
+      if (activeMedia) {
+        const nextSubtitles = await listSubtitles(activeMedia.id);
+        setSubtitles(nextSubtitles);
+        setSelectedSubtitleId(selectedSubtitle.id);
+      }
+    } catch (error) {
+      appendLog(`保存字幕失败：${error instanceof Error ? error.message : String(error)}`);
     } finally {
       setBusy(false);
     }
@@ -191,11 +269,11 @@ function App() {
               <RefreshCw size={16} />
               扫描
             </button>
-            <button disabled>
+            <button disabled={!activeMedia || busy} onClick={handleProcess}>
               <Wand2 size={16} />
               处理
             </button>
-            <button disabled>
+            <button disabled={!activeMedia || busy} onClick={handleExport}>
               <Save size={16} />
               导出
             </button>
@@ -250,15 +328,54 @@ function App() {
               <div className="empty-state">还没有字幕段。后续处理完成后会显示原文和译文。</div>
             ) : (
               subtitles.map((segment) => (
-                <div className="subtitle-row" key={segment.id}>
+                <button
+                  className={segment.id === selectedSubtitle?.id ? "subtitle-row selected" : "subtitle-row"}
+                  key={segment.id}
+                  onClick={() => setSelectedSubtitleId(segment.id)}
+                >
                   <span>{segment.index_no}</span>
                   <span>{formatTimestamp(segment.start_ms)}</span>
                   <span>{formatTimestamp(segment.end_ms)}</span>
                   <span>{segment.edited_text || segment.translated_text || segment.source_text}</span>
-                </div>
+                </button>
               ))
             )}
           </div>
+        </div>
+
+        <div className="editor-panel editor-form">
+          <div className="panel-title">
+            <span>当前字幕编辑</span>
+            <button className="icon-button" title="保存字幕" disabled={!selectedSubtitle || busy} onClick={handleSaveSubtitle}>
+              <Save size={16} />
+            </button>
+          </div>
+          {selectedSubtitle ? (
+            <div className="subtitle-edit-form">
+              <label>
+                开始时间（毫秒）
+                <input value={editStartMs} onChange={(event) => setEditStartMs(event.target.value)} />
+              </label>
+              <label>
+                结束时间（毫秒）
+                <input value={editEndMs} onChange={(event) => setEditEndMs(event.target.value)} />
+              </label>
+              <label>
+                原文
+                <textarea value={editSourceText} onChange={(event) => setEditSourceText(event.target.value)} />
+              </label>
+              <label>
+                译文
+                <textarea value={editTranslatedText} onChange={(event) => setEditTranslatedText(event.target.value)} />
+              </label>
+              <label>
+                最终文本
+                <textarea value={editEditedText} onChange={(event) => setEditEditedText(event.target.value)} />
+              </label>
+            </div>
+          ) : (
+            <div className="empty-state">选择一条字幕后可以直接编辑。</div>
+          )}
         </div>
 
         <div className="log-panel">

@@ -1,10 +1,10 @@
 from dataclasses import dataclass
 from pathlib import Path
 
+from app.services.file_utils import existing_subtitle_path, fingerprint_file
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.config import settings
 from app.models.entities import MediaItem, Project
 
 VIDEO_EXTENSIONS = {".mkv", ".mp4", ".mov"}
@@ -17,20 +17,13 @@ class ScanStats:
     updated: int = 0
     skipped: int = 0
 
-
-def fingerprint_file(path: Path) -> str:
-    stat = path.stat()
-    return f"{path.resolve()}::{stat.st_size}::{int(stat.st_mtime)}"
-
-
-def existing_subtitle_path(path: Path) -> str | None:
-    srt_path = path.with_suffix(".srt")
-    if srt_path.exists():
-        return str(srt_path)
-    return None
-
-
-def scan_project_media(session: Session, project: Project) -> ScanStats:
+def scan_project_media(
+    session: Session,
+    project: Project,
+    *,
+    default_source_lang: str = "auto",
+    default_target_lang: str = "zh-CN",
+) -> ScanStats:
     root = Path(project.media_root).expanduser()
     if not root.exists() or not root.is_dir():
         raise FileNotFoundError(f"Media root does not exist or is not a directory: {root}")
@@ -60,8 +53,8 @@ def scan_project_media(session: Session, project: Project) -> ScanStats:
                     file_path=resolved,
                     file_name=path.name,
                     status="new",
-                    source_language=settings.default_source_lang,
-                    target_language=settings.default_target_lang,
+                    source_language=default_source_lang,
+                    target_language=default_target_lang,
                     subtitle_path=subtitle_path,
                     fingerprint=fingerprint,
                 )

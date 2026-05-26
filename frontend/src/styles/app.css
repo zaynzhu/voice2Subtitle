@@ -202,6 +202,7 @@ h1 {
 }
 
 .media-row {
+  appearance: none;
   display: grid;
   grid-template-columns: 14px 1fr 58px 90px 80px;
   align-items: center;
@@ -318,12 +319,32 @@ h1 {
 }
 
 .subtitle-row {
+  appearance: none;
   border-top: 1px solid var(--line);
+  text-align: left;
+  width: 100%;
 }
 
 .empty-state {
   padding: 22px;
   color: var(--muted);
+}
+
+.editor-form textarea {
+  width: 100%;
+  min-height: 68px;
+  resize: vertical;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 10px 11px;
+  background: #fffdf7;
+  color: var(--ink);
+  font: inherit;
+}
+
+.subtitle-edit-form {
+  display: grid;
+  gap: 10px;
 }
 
 .log-panel {

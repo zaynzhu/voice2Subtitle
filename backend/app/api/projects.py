@@ -1,3 +1,4 @@
+from app.config import settings
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -35,7 +36,12 @@ def scan_project(project_id: int, session: Session = Depends(get_session)) -> Sc
         raise HTTPException(status_code=404, detail="Project not found")
 
     try:
-        stats = scan_project_media(session, project)
+        stats = scan_project_media(
+            session,
+            project,
+            default_source_lang=settings.default_source_lang,
+            default_target_lang=settings.default_target_lang,
+        )
     except FileNotFoundError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

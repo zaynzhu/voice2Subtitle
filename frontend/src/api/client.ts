@@ -44,6 +44,14 @@ export type SubtitleSegment = {
   is_edited: boolean;
 };
 
+export type SubtitleEditPayload = {
+  source_text: string;
+  translated_text: string;
+  edited_text: string;
+  start_ms: number;
+  end_ms: number;
+};
+
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
   const response = await fetch(url, {
     headers: { "Content-Type": "application/json" },
@@ -83,4 +91,19 @@ export function listMedia(projectId: number): Promise<MediaItem[]> {
 
 export function listSubtitles(mediaId: number): Promise<SubtitleSegment[]> {
   return request<SubtitleSegment[]>(`/api/media/${mediaId}/subtitles`);
+}
+
+export function updateSubtitle(segmentId: number, payload: SubtitleEditPayload): Promise<{ id: number; status: string }> {
+  return request(`/api/subtitles/${segmentId}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function processMedia(mediaId: number): Promise<{ job_id: number; media_item_id: number; stage: string }> {
+  return request(`/api/media/${mediaId}/process`, { method: "POST" });
+}
+
+export function exportMedia(mediaId: number): Promise<{ media_id: number; subtitle_path: string }> {
+  return request(`/api/media/${mediaId}/export`, { method: "POST" });
 }
