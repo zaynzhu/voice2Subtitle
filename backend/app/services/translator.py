@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import importlib
 from abc import ABC, abstractmethod
@@ -132,7 +132,7 @@ class DeepTranslatorTranslator(Translator):
                 target=target_lang,
             ).translate(request.text)
 
-            # None 守卦：翻译器返回空结果时视为失败
+            # None 守卫：翻译器返回空结果时视为失败
             if translated is None:
                 return TranslationResult(
                     index_no=request.index_no,
@@ -196,3 +196,4 @@ def create_translator_from_settings(settings: Settings) -> Translator:
         配置好的 DeepTranslatorTranslator 实例（固定使用 Google 服务）。
     """
     return DeepTranslatorTranslator()
+
