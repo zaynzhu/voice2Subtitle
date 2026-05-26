@@ -1,8 +1,14 @@
+import logging
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import exports, health, jobs, media, projects, subtitle_edits, subtitles
-from app.db import init_db
+from app.db import SessionLocal, init_db
+from app.workers.processor import init_processor
+
+# 全局 processor 引用，在 on_startup 中初始化
+_processor = None
 
 
 def create_app() -> FastAPI:
@@ -18,7 +24,25 @@ def create_app() -> FastAPI:
 
     @app.on_event("startup")
     def on_startup() -> None:
+        global _processor
+        # 初始化数据库表结构
         init_db()
+        # 初始化串行 Worker 处理器
+        _processor = init_processor(SessionLocal)
+        # 恢复上次异常中断的 Job
+        recovered = _processor.recover_interrupted_jobs()
+        if recovered:
+            logging.getLogger(__name__).warning(
+                "恢复了 %d 个被中断的 job", recovered
+            )
+        # 启动后台 worker 线程
+        _processor.start()
+
+    @app.on_event("shutdown")
+    def on_shutdown() -> None:
+        # 通知后台 worker 线程停止
+        if _processor:
+            _processor.stop()
 
     app.include_router(health.router)
     app.include_router(projects.router)
