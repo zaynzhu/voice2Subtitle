@@ -89,57 +89,61 @@ voice2Subtitle/
 
 ## 🚀 本地快速启动
 
-### 方式一：前后端独立开发模式（推荐开发调试使用）
+### 方式一：全局 Python 环境一键极速启动（推荐，已于 2026-05-26 验证成功）
 
-#### 1. 启动后端服务
+如果您不想折腾复杂的虚拟环境，并且电脑中已安装 Python 3.11+，可以直接使用本方法：
+
+```powershell
+# 1. 进入后端目录，一键安装所有核心依赖与 AI 库
+cd backend
+python -m pip install "deep-translator>=1.11.4" "fastapi>=0.111.0" "pydantic-settings>=2.2.1" "sqlalchemy>=2.0.30" "uvicorn[standard]>=0.29.0" "faster-whisper>=1.0.0"
+
+# 2. 启动一站式托管服务（后端将自动挂载前端已编译好的 dist 静态网页）
+python -m uvicorn app.main:app --host 127.0.0.1 --port 19000
+```
+> 🎉 **运行成功**：在浏览器中打开 [http://127.0.0.1:19000](http://127.0.0.1:19000) 即可开始使用！
+
+---
+
+### 方式二：虚拟环境一站式部署模式
+
+如果您希望在独立的隔离环境中运行项目，可以采用本模式：
+
 ```powershell
 cd backend
 # 1. 创建并激活虚拟环境
 python -m venv .venv
 .venv\Scripts\activate
 
-# 2. 安装核心运行依赖
-pip install -r requirements.txt
+# 2. 直接安装核心第三方依赖与 AI 库（规避本地包发现打包问题）
+pip install "deep-translator>=1.11.4" "fastapi>=0.111.0" "pydantic-settings>=2.2.1" "sqlalchemy>=2.0.30" "uvicorn[standard]>=0.29.0" "faster-whisper>=1.0.0"
 
-# 3. 安装额外的 AI 依赖与翻译库
-pip install deep-translator>=1.11.4 faster-whisper>=1.0.0
-
-# 4. 拷贝并配置本地环境变量
-cp .env.example .env
-# [重要] 请使用文本编辑器打开 .env，配置您的 V2S_MODEL_ROOT 指向本地模型物理路径
-
-# 5. 启动后端开发服务器
-uvicorn app.main:app --host 127.0.0.1 --port 19000 --reload
+# 3. 启动一站式服务
+python -m uvicorn app.main:app --host 127.0.0.1 --port 19000
 ```
-> 后端默认监听端口：`http://127.0.0.1:19000`
-
-#### 2. 启动前端服务
-```powershell
-cd frontend
-# 1. 安装前端 node 依赖
-npm install
-
-# 2. 启动 Vite 开发服务器
-npm run dev
-```
-> 前端开发服务器默认运行在：`http://127.0.0.1:5173`。Vite 已配置透明代理，所有前端 API 请求将自动转向后端 `19000` 端口。
 
 ---
 
-### 方式二：一站式编译部署模式（推荐生产及日常使用）
+### 方式三：前后端独立开发调试模式
 
-如果您不希望同时开启两个终端，或者希望只通过一个后端端口访问完整的前端控制台，可以采用本模式：
+如果您需要对前端代码进行实时热更新（HMR）调试，可以同时开启两个终端：
 
+#### 1. 启动后端 API 服务
 ```powershell
-# 1. 编译前端静态文件
-cd frontend
-npm run build
-
-# 2. 回到后端启动服务（后端 main.py 会自动挂载前端编译出的静态资源）
-cd ../backend
-uvicorn app.main:app --host 127.0.0.1 --port 19000
+cd backend
+# 激活环境并启动
+.venv\Scripts\activate
+python -m uvicorn app.main:app --host 127.0.0.1 --port 19000 --reload
 ```
-运行后，直接在浏览器中打开 `http://127.0.0.1:19000` 即可享受完整的本地字幕工作站服务。
+
+#### 2. 启动前端 Vite 开发服务器
+```powershell
+cd frontend
+# 安装依赖并运行
+npm install
+npm run dev
+```
+> 前端开发服务器默认运行在：`http://127.0.0.1:5173`。Vite 已配置透明代理，所有前端 API 请求将自动转向后端 `19000` 端口。
 
 ---
 
