@@ -51,6 +51,25 @@ def create_app() -> FastAPI:
     app.include_router(subtitle_edits.router)
     app.include_router(jobs.router)
     app.include_router(exports.router)
+
+    # 动态探测并挂载前端静态文件目录
+    from fastapi.staticfiles import StaticFiles
+    from pathlib import Path
+
+    current_file = Path(__file__).resolve()
+    # main.py -> app -> backend -> voice2Subtitle
+    project_root = current_file.parent.parent.parent
+    frontend_dist = project_root / "frontend" / "dist"
+
+    if frontend_dist.exists() and frontend_dist.is_dir():
+        app.mount("/", StaticFiles(directory=str(frontend_dist), html=True), name="static")
+        logging.getLogger(__name__).info("已成功挂载前端静态文件服务（%s）", frontend_dist)
+    else:
+        logging.getLogger(__name__).warning(
+            "前端构建目录未找到或不是目录：%s。若要使用一站式部署，请先在 frontend 目录下构建前端。",
+            frontend_dist
+        )
+
     return app
 
 
