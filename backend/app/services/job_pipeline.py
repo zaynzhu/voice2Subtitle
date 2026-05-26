@@ -56,7 +56,99 @@ def run_processing_pipeline(session: Session, media_item: MediaItem) -> Pipeline
         media_item.status = "extracting_audio"
         session.flush()
 
-        raise NotImplementedError("Transcription pipeline is not connected yet")
+        # 3. 语音转录
+        add_job_log(session, job, "info", "Starting speech transcription")
+        job.stage = "transcribing"
+        media_item.status = "transcribing"
+        session.flush()
+
+        from app.services.transcriber import create_transcriber_from_settings
+        transcriber = create_transcriber_from_settings(settings)
+        segments = transcriber.transcribe(audio_path)
+
+        add_job_log(session, job, "info", f"Transcription complete. Got {len(segments)} segments. Saving segments...")
+        
+        # 清理可能已存在的旧字幕段，避免残留
+        from sqlalchemy import delete
+        session.execute(delete(SubtitleSegment).where(SubtitleSegment.media_item_id == media_item.id))
+        
+        db_segments = []
+        for seg in segments:
+            db_seg = SubtitleSegment(
+                media_item_id=media_item.id,
+                index_no=seg.index_no,
+                start_ms=seg.start_ms,
+                end_ms=seg.end_ms,
+                source_text=seg.text,
+                confidence=seg.confidence,
+            )
+            session.add(db_seg)
+            db_segments.append(db_seg)
+        
+        job.progress = 0.60
+        job.stage = "ready_for_translation"
+        media_item.status = "transcribed"
+        session.flush()
+
+        # 4. 字幕翻译
+        add_job_log(session, job, "info", f"Starting translation from {media_item.source_language} to {media_item.target_language}")
+        job.stage = "translating"
+        media_item.status = "translating"
+        session.flush()
+
+        from app.services.translator import create_translator_from_settings, TranslationRequest
+        translator = create_translator_from_settings(settings)
+
+        translation_requests = [
+            TranslationRequest(index_no=seg.index_no, text=seg.source_text)
+            for seg in db_segments
+        ]
+
+        translation_results = translator.translate_segments(
+            source_lang=media_item.source_language,
+            target_lang=media_item.target_language,
+            segments=translation_requests,
+        )
+
+        failed_count = 0
+        for res in translation_results:
+            seg = db_segments[res.index_no - 1]
+            if res.success:
+                seg.translated_text = res.translated_text
+            else:
+                seg.translated_text = ""
+                failed_count += 1
+                add_job_log(session, job, "warning", f"Segment {res.index_no} translation failed: {res.error}")
+
+        if failed_count > 0:
+            add_job_log(session, job, "warning", f"Translation complete with {failed_count} segments failed")
+        else:
+            add_job_log(session, job, "info", "Translation complete successfully")
+
+        job.progress = 0.90
+        job.stage = "ready_for_export"
+        media_item.status = "translated"
+        session.flush()
+
+        # 5. 导出字幕为 SRT
+        add_job_log(session, job, "info", "Exporting subtitles to SRT file")
+        job.stage = "exporting_subtitles"
+        session.flush()
+
+        output_srt_path = export_media_subtitles(session, media_item)
+        media_item.subtitle_path = str(output_srt_path)
+
+        # 6. Pipeline 完成
+        job.status = "succeeded"
+        job.stage = "completed"
+        job.progress = 1.0
+        job.finished_at = utc_now()
+        media_item.status = "ready_for_review"
+        add_job_log(session, job, "info", f"Job pipeline completed successfully. Subtitles saved to: {output_srt_path}")
+        
+        session.commit()
+        return PipelineResult(job_id=job.id, media_item_id=media_item.id, stage="completed")
+
     except Exception as exc:
         job.status = "failed"
         job.stage = "failed"

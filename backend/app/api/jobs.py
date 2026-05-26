@@ -45,10 +45,16 @@ def process_media(media_id: int, session: Session = Depends(get_session)) -> dic
     if media_item is None:
         raise HTTPException(status_code=404, detail="Media item not found")
 
-    try:
-        result = run_processing_pipeline(session, media_item)
-        session.commit()
-        return {"job_id": result.job_id, "media_item_id": result.media_item_id, "stage": result.stage}
-    except NotImplementedError as exc:
-        session.rollback()
-        raise HTTPException(status_code=501, detail=str(exc)) from exc
+    # 更新媒体状态为已排队
+    media_item.status = "queued"
+    session.commit()
+
+    # 异步入队任务
+    from app.workers.queue import job_queue
+    job_queue.enqueue(media_id)
+
+    return {
+        "media_item_id": media_id,
+        "status": "queued",
+        "message": "Media processing has been enqueued"
+    }
