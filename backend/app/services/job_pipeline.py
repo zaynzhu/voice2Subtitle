@@ -42,12 +42,14 @@ def run_processing_pipeline(session: Session, media_item: MediaItem) -> Pipeline
     session.flush()
 
     try:
+        print("[DEBUG] 步骤 1: 正在执行 ffprobe 探测媒体...", flush=True)
         add_job_log(session, job, "info", f"Probing media: {media_item.file_name}")
         probe = probe_media(media_item.file_path)
         media_item.duration_ms = probe.duration_ms
         media_item.status = "probing"
         session.flush()
 
+        print("[DEBUG] 步骤 2: 正在执行 ffmpeg 提取音频...", flush=True)
         audio_path = Path(settings.cache_dir) / f"{media_item.id}.mp3"
         add_job_log(session, job, "info", "Extracting audio")
         extract_audio(media_item.file_path, audio_path)
@@ -57,6 +59,7 @@ def run_processing_pipeline(session: Session, media_item: MediaItem) -> Pipeline
         session.flush()
 
         # 3. 语音转录
+        print("[DEBUG] 步骤 3: 正在装载 Whisper 模型并开始语音转录...", flush=True)
         add_job_log(session, job, "info", "Starting speech transcription")
         job.stage = "transcribing"
         media_item.status = "transcribing"
@@ -66,6 +69,7 @@ def run_processing_pipeline(session: Session, media_item: MediaItem) -> Pipeline
         transcriber = create_transcriber_from_settings(settings)
         segments = transcriber.transcribe(audio_path)
 
+        print(f"[DEBUG] 步骤 3 完成，共获得 {len(segments)} 条字幕段，正在保存转录结果...", flush=True)
         add_job_log(session, job, "info", f"Transcription complete. Got {len(segments)} segments. Saving segments...")
         
         # 清理可能已存在的旧字幕段，避免残留
@@ -91,6 +95,7 @@ def run_processing_pipeline(session: Session, media_item: MediaItem) -> Pipeline
         session.flush()
 
         # 4. 字幕翻译
+        print(f"[DEBUG] 步骤 4: 正在启动字幕翻译，源语言: {media_item.source_language} ➜ 目标语言: {media_item.target_language}...", flush=True)
         add_job_log(session, job, "info", f"Starting translation from {media_item.source_language} to {media_item.target_language}")
         job.stage = "translating"
         media_item.status = "translating"
@@ -121,8 +126,10 @@ def run_processing_pipeline(session: Session, media_item: MediaItem) -> Pipeline
                 add_job_log(session, job, "warning", f"Segment {res.index_no} translation failed: {res.error}")
 
         if failed_count > 0:
+            print(f"[DEBUG] 步骤 4 完成，翻译结束，但有 {failed_count} 句翻译失败", flush=True)
             add_job_log(session, job, "warning", f"Translation complete with {failed_count} segments failed")
         else:
+            print("[DEBUG] 步骤 4 完成，全部字幕段翻译成功！", flush=True)
             add_job_log(session, job, "info", "Translation complete successfully")
 
         job.progress = 0.90
@@ -131,6 +138,7 @@ def run_processing_pipeline(session: Session, media_item: MediaItem) -> Pipeline
         session.flush()
 
         # 5. 导出字幕为 SRT
+        print("[DEBUG] 步骤 5: 正在导出字幕为 srt 物理文件...", flush=True)
         add_job_log(session, job, "info", "Exporting subtitles to SRT file")
         job.stage = "exporting_subtitles"
         session.flush()
