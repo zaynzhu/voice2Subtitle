@@ -1,0 +1,20 @@
+[project]
+name = "voice2subtitle-backend"
+version = "0.1.0"
+description = "Local web workstation backend for subtitle generation and editing."
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.111.0",
+  "pydantic-settings>=2.2.1",
+  "sqlalchemy>=2.0.30",
+  "uvicorn[standard]>=0.29.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.2.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
