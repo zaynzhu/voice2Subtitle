@@ -161,6 +161,77 @@ class FasterWhisperTranscriber(Transcriber):
         return result
 
 
+class OpenAIWhisperTranscriber(Transcriber):
+    """基于原生 openai-whisper 的转录器实现，支持本地 .pt 模型文件直接加载。"""
+
+    def __init__(
+        self,
+        model_path: str,
+        device: str = "auto",
+    ) -> None:
+        """初始化原生 Whisper 转录器。
+
+        Args:
+            model_path: 本地 .pt 模型的绝对文件路径。
+            device: 推理设备，"auto" 时自动检测 CUDA 可用性。
+        """
+        if device == "auto":
+            try:
+                import torch  # type: ignore[import-untyped]
+                device = "cuda" if torch.cuda.is_available() else "cpu"
+            except ModuleNotFoundError:
+                device = "cpu"
+        self._device = device
+        self._model_path = model_path
+        self._model = None  # 懒加载
+
+    def _load_model(self) -> None:
+        """懒加载 openai-whisper 模型。"""
+        import whisper  # type: ignore[import-untyped]
+
+        self._model = whisper.load_model(self._model_path, device=self._device)
+
+    def transcribe(self, audio_path: str | Path) -> list[TranscriptSegment]:
+        """对音频文件执行转录并返回片段列表。"""
+        if self._model is None:
+            self._load_model()
+
+        audio_file = str(Path(audio_path))
+        fp16 = self._device == "cuda"
+
+        # 运行识别，配置与用户原型的最佳配置保持一致
+        result = self._model.transcribe(
+            audio_file,
+            fp16=fp16,
+            condition_on_previous_text=True,
+        )
+        segments = result.get("segments", [])
+
+        result_segments: list[TranscriptSegment] = []
+        for idx, seg in enumerate(segments, start=1):
+            start_ms = int(round(seg["start"] * 1000))
+            end_ms = int(round(seg["end"] * 1000))
+            text = seg["text"].strip()
+
+            avg_logprob = seg.get("avg_logprob", None)
+            if avg_logprob is not None:
+                confidence: float | None = min(1.0, max(0.0, math.exp(avg_logprob)))
+            else:
+                confidence = None
+
+            result_segments.append(
+                TranscriptSegment(
+                    index_no=idx,
+                    start_ms=start_ms,
+                    end_ms=end_ms,
+                    text=text,
+                    confidence=confidence,
+                )
+            )
+
+        return result_segments
+
+
 # ---------------------------------------------------------------------------
 # 工厂函数
 # ---------------------------------------------------------------------------
@@ -168,15 +239,37 @@ class FasterWhisperTranscriber(Transcriber):
 def create_transcriber_from_settings(settings) -> Transcriber:
     """从 Settings 对象创建转录器实例。
 
+    根据 whisper_model 配置的路径或名称，智能识别是原生 openai-whisper 格式（.pt 模型）
+    还是 faster-whisper 格式（ctranslate2 模型），并返回对应的转录处理器。
+
     Args:
         settings: 包含 whisper_model、whisper_device、whisper_compute_type
-                  字段的配置对象（通常为 app.config.Settings 实例）。
+                  字段的配置对象。
 
     Returns:
-        配置好的 FasterWhisperTranscriber 实例。
+        自适应配置好的 Transcriber 实例。
     """
-    return FasterWhisperTranscriber(
-        model_name=settings.whisper_model,
-        device=settings.whisper_device,
-        compute_type=settings.whisper_compute_type,
-    )
+    model_path = settings.whisper_model
+    is_openai_format = False
+
+    path_obj = Path(model_path)
+    if path_obj.is_file() and path_obj.suffix == ".pt":
+        is_openai_format = True
+    elif path_obj.is_dir():
+        # 查找目录下是否有 .pt 文件（例如用户的 E:\temp\测试翻译\whisper_model 下有 medium.pt）
+        pt_files = list(path_obj.glob("*.pt"))
+        if pt_files:
+            model_path = str(pt_files[0])
+            is_openai_format = True
+
+    if is_openai_format:
+        return OpenAIWhisperTranscriber(
+            model_path=model_path,
+            device=settings.whisper_device,
+        )
+    else:
+        return FasterWhisperTranscriber(
+            model_name=settings.whisper_model,
+            device=settings.whisper_device,
+            compute_type=settings.whisper_compute_type,
+        )
