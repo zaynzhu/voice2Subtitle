@@ -3,6 +3,10 @@ from __future__ import annotations
 import importlib
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from app.config import Settings
 
 
 # ---------------------------------------------------------------------------
@@ -128,6 +132,15 @@ class DeepTranslatorTranslator(Translator):
                 target=target_lang,
             ).translate(request.text)
 
+            # None 守卦：翻译器返回空结果时视为失败
+            if translated is None:
+                return TranslationResult(
+                    index_no=request.index_no,
+                    translated_text="",
+                    success=False,
+                    error="翻译器返回空结果",
+                )
+
             return TranslationResult(
                 index_no=request.index_no,
                 translated_text=translated,
@@ -173,7 +186,7 @@ class DeepTranslatorTranslator(Translator):
 # 工厂函数
 # ---------------------------------------------------------------------------
 
-def create_translator_from_settings(settings) -> Translator:
+def create_translator_from_settings(settings: Settings) -> Translator:
     """从 Settings 对象创建翻译器实例。
 
     Args:
