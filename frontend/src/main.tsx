@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { Captions, FolderSearch, Play, RefreshCw, Save, Settings, Wand2, Cpu } from "lucide-react";
+import { Captions, FolderSearch, Play, RefreshCw, Save, Settings, Wand2, Cpu, Trash2 } from "lucide-react";
 
 import {
   createProject,
@@ -13,6 +13,7 @@ import {
   updateSubtitle,
   unloadGpuMemory,
   browseDirectory,
+  deleteProject,
   type MediaItem,
   type Project,
   type SubtitleSegment
@@ -58,6 +59,18 @@ function App() {
   const [logLines, setLogLines] = useState<string[]>(["等待连接后端。"]);
   const [busy, setBusy] = useState(false);
 
+  const [toasts, setToasts] = useState<{ id: string; message: string; type: "success" | "error" | "info" }[]>([]);
+
+  function showToast(message: string, type: "success" | "error" | "info" = "info") {
+    const id = Math.random().toString(36).substring(2, 9);
+    setToasts((current) => [...current, { id, message, type }]);
+    setTimeout(() => {
+      setToasts((current) => current.filter((t) => t.id !== id));
+    }, 3500);
+  }
+
+  const [deletingProjectId, setDeletingProjectId] = useState<number | null>(null);
+
   const selectedSubtitle = useMemo(
     () => subtitles.find((segment) => segment.id === selectedSubtitleId) ?? subtitles[0] ?? null,
     [subtitles, selectedSubtitleId]
@@ -81,8 +94,14 @@ function App() {
 
   useEffect(() => {
     refreshProjects()
-      .then(() => appendLog("后端连接成功。"))
-      .catch((error) => appendLog(`后端连接失败：${error.message}`));
+      .then(() => {
+        appendLog("后端连接成功。");
+        showToast("已成功连接本地字幕工作站后端", "success");
+      })
+      .catch((error) => {
+        appendLog(`后端连接失败：${error.message}`);
+        showToast(`后端连接失败：${error.message}`, "error");
+      });
   }, []);
 
   useEffect(() => {
@@ -113,9 +132,44 @@ function App() {
     setEditEndMs(String(selectedSubtitle.end_ms));
   }, [selectedSubtitle?.id]);
 
+  function handleDeleteProject(projectId: number, event: React.MouseEvent) {
+    event.stopPropagation();
+    setDeletingProjectId(projectId);
+  }
+
+  async function executeDeleteProject(projectId: number) {
+    const project = projects.find((p) => p.id === projectId);
+    if (!project) return;
+
+    setBusy(true);
+    setDeletingProjectId(null);
+    try {
+      await deleteProject(projectId);
+      appendLog(`[系统] 已成功删除项目：${project.name}`);
+      showToast(`已成功删除项目 "${project.name}"`, "success");
+      const updated = projects.filter((p) => p.id !== projectId);
+      setProjects(updated);
+
+      if (activeProject?.id === projectId) {
+        const nextActive = updated[0] ?? null;
+        setActiveProject(nextActive);
+        if (!nextActive) {
+          setMediaItems([]);
+          setActiveMedia(null);
+        }
+      }
+    } catch (error) {
+      appendLog(`[系统] 删除项目失败：${error instanceof Error ? error.message : String(error)}`);
+      showToast(`删除项目失败：${error instanceof Error ? error.message : String(error)}`, "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function handleCreateProject() {
     if (!mediaRoot.trim()) {
       appendLog("请先输入视频文件夹路径。");
+      showToast("请先选择或输入视频文件夹路径", "info");
       return;
     }
 
@@ -129,8 +183,10 @@ function App() {
       setProjects((current) => [project, ...current]);
       setActiveProject(project);
       appendLog(`已创建项目：${project.name}`);
+      showToast(`已成功创建项目 "${project.name}"`, "success");
     } catch (error) {
       appendLog(`创建项目失败：${error instanceof Error ? error.message : String(error)}`);
+      showToast(`创建项目失败：${error instanceof Error ? error.message : String(error)}`, "error");
     } finally {
       setBusy(false);
     }
@@ -141,12 +197,13 @@ function App() {
     setBusy(true);
     try {
       const result = await scanProject(activeProject.id);
-      appendLog(
-        `扫描完成：发现 ${result.found}，新增 ${result.created}，更新 ${result.updated}，跳过 ${result.skipped}。`
-      );
+      const msg = `扫描完成：发现 ${result.found}，新增 ${result.created}，更新 ${result.updated}，跳过 ${result.skipped}。`;
+      appendLog(msg);
+      showToast(msg, "success");
       await refreshMedia(activeProject);
     } catch (error) {
       appendLog(`扫描失败：${error instanceof Error ? error.message : String(error)}`);
+      showToast(`扫描失败：${error instanceof Error ? error.message : String(error)}`, "error");
     } finally {
       setBusy(false);
     }
@@ -158,8 +215,10 @@ function App() {
     try {
       const result = await processMedia(activeMedia.id);
       appendLog(`已发起处理任务：#${result.job_id}，阶段 ${result.stage}。`);
+      showToast(`任务已成功投递至后台队列 (Job #${result.job_id})`, "success");
     } catch (error) {
       appendLog(`处理失败：${error instanceof Error ? error.message : String(error)}`);
+      showToast(`发起处理任务失败：${error instanceof Error ? error.message : String(error)}`, "error");
     } finally {
       setBusy(false);
     }
@@ -171,11 +230,13 @@ function App() {
     try {
       const result = await exportMedia(activeMedia.id);
       appendLog(`已导出字幕：${result.subtitle_path}`);
+      showToast("字幕 SRT 物理文件导出成功！", "success");
       if (activeProject) {
         await refreshMedia(activeProject);
       }
     } catch (error) {
       appendLog(`导出失败：${error instanceof Error ? error.message : String(error)}`);
+      showToast(`导出失败：${error instanceof Error ? error.message : String(error)}`, "error");
     } finally {
       setBusy(false);
     }
@@ -186,8 +247,10 @@ function App() {
     try {
       const result = await unloadGpuMemory();
       appendLog(`[系统] GPU 资源清理成功：${result.message}`);
+      showToast("GPU 显存安全释放成功！", "success");
     } catch (error) {
       appendLog(`[系统] 释放 GPU 资源失败：${error instanceof Error ? error.message : String(error)}`);
+      showToast(`释放 GPU 显存失败：${error instanceof Error ? error.message : String(error)}`, "error");
     } finally {
       setBusy(false);
     }
@@ -200,9 +263,11 @@ function App() {
       if (result.path) {
         setMediaRoot(result.path);
         appendLog(`[系统] 已选定文件夹路径：${result.path}`);
+        showToast("已选择文件夹物理路径", "success");
       }
     } catch (error) {
       appendLog(`[系统] 无法打开文件夹选择框，请手动在输入框中填写绝对路径。`);
+      showToast("无法打开系统弹窗，请手动填写路径", "info");
     } finally {
       setBusy(false);
     }
@@ -221,6 +286,7 @@ function App() {
         end_ms: Number(editEndMs)
       });
       appendLog(`字幕段 #${selectedSubtitle.index_no} 已保存。`);
+      showToast(`字幕段 #${selectedSubtitle.index_no} 保存成功`, "success");
       if (activeMedia) {
         const nextSubtitles = await listSubtitles(activeMedia.id);
         setSubtitles(nextSubtitles);
@@ -228,13 +294,15 @@ function App() {
       }
     } catch (error) {
       appendLog(`保存字幕失败：${error instanceof Error ? error.message : String(error)}`);
+      showToast(`保存字幕失败：${error instanceof Error ? error.message : String(error)}`, "error");
     } finally {
       setBusy(false);
     }
   }
 
   return (
-    <main className="workspace">
+    <>
+      <main className="workspace">
       <aside className="sidebar">
         <div className="brand">
           <Captions size={26} />
@@ -259,25 +327,10 @@ function App() {
                 style={{ flex: 1, minWidth: 0 }}
               />
               <button
+                className="secondary-button"
                 type="button"
                 disabled={busy}
                 onClick={handleBrowse}
-                style={{
-                  width: "auto",
-                  padding: "0 12px",
-                  whiteSpace: "nowrap",
-                  fontSize: "13px",
-                  height: "36px",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  backgroundColor: "rgba(255, 255, 255, 0.08)",
-                  border: "1px solid rgba(255, 255, 255, 0.12)",
-                  borderRadius: "6px",
-                  cursor: "pointer",
-                  color: "#fff",
-                  transition: "all 0.2s"
-                }}
               >
                 选择...
               </button>
@@ -298,17 +351,29 @@ function App() {
           </div>
           <div className="project-list">
             {projects.map((project) => (
-              <button
-                className={project.id === activeProject?.id ? "selected" : ""}
+              <div
+                className={`project-item ${project.id === activeProject?.id ? "selected" : ""}`}
                 key={project.id}
-                onClick={() => {
-                  setActiveProject(project);
-                  setActiveMedia(null);
-                }}
               >
-                <strong>{project.name}</strong>
-                <span>{project.media_root}</span>
-              </button>
+                <button
+                  className="project-btn"
+                  onClick={() => {
+                    setActiveProject(project);
+                    setActiveMedia(null);
+                  }}
+                >
+                  <strong>{project.name}</strong>
+                  <span>{project.media_root}</span>
+                </button>
+                <button
+                  className="delete-btn"
+                  title="删除项目"
+                  disabled={busy}
+                  onClick={(event) => handleDeleteProject(project.id, event)}
+                >
+                  <Trash2 size={14} />
+                </button>
+              </div>
             ))}
           </div>
         </section>
@@ -445,6 +510,38 @@ function App() {
         </div>
       </section>
     </main>
+      <div className="toast-container">
+        {toasts.map((toast) => (
+          <div key={toast.id} className={`toast ${toast.type}`}>
+            <span>{toast.message}</span>
+          </div>
+        ))}
+      </div>
+
+      {deletingProjectId !== null && (
+        <div className="modal-overlay" onClick={() => setDeletingProjectId(null)}>
+          <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <Trash2 size={18} style={{ color: "var(--warning)" }} />
+              <span>删除项目确认</span>
+            </div>
+            <div className="modal-body">
+              确定要物理删除项目 <strong>"{projects.find(p => p.id === deletingProjectId)?.name}"</strong> 吗？
+              <br />
+              此操作将一并清除该项目在数据库中的所有视频、字幕、日志和后台任务，且不可撤销！
+            </div>
+            <div className="modal-actions">
+              <button className="cancel-btn" onClick={() => setDeletingProjectId(null)}>
+                取消
+              </button>
+              <button className="confirm-delete-btn" onClick={() => executeDeleteProject(deletingProjectId)}>
+                确定删除
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   );
 }
 

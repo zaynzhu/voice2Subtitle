@@ -145,29 +145,101 @@ input {
   color: var(--ink);
 }
 
+.secondary-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 36px;
+  border-radius: 6px;
+  padding: 0 12px;
+  background: var(--panel-strong);
+  border: 1px solid var(--line);
+  color: var(--ink);
+  font-size: 13px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.secondary-button:hover:not(:disabled) {
+  background: var(--line);
+}
+
+.secondary-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+}
+
 .project-list {
   display: grid;
   gap: 8px;
 }
 
-.project-list button {
+.project-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-radius: 6px;
+  background: transparent;
+  transition: all 0.2s ease;
+  position: relative;
+  overflow: hidden;
+}
+
+.project-item:hover {
+  background: var(--panel-strong);
+}
+
+.project-item.selected {
+  background: #dceee9;
+}
+
+.project-item .project-btn {
+  flex: 1;
   display: grid;
   gap: 4px;
   text-align: left;
-  border-radius: 6px;
   padding: 10px;
   background: transparent;
   color: var(--ink);
+  min-width: 0;
+  border: none;
+  cursor: pointer;
 }
 
-.project-list button span {
+.project-item .project-btn span {
   color: var(--muted);
+  font-size: 11px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.project-list .selected,
+.project-item .delete-btn {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  margin-right: 8px;
+  opacity: 0.4;
+  transition: all 0.15s ease;
+  cursor: pointer;
+  border: none;
+}
+
+.project-item:hover .delete-btn {
+  opacity: 1;
+}
+
+.project-item .delete-btn:hover {
+  background: rgba(189, 91, 44, 0.1);
+  color: var(--warning);
+}
+
 .media-row.active {
   background: #dceee9;
 }
@@ -357,3 +429,176 @@ h1 {
   font-size: 13px;
   line-height: 1.7;
 }
+
+/* ==========================================
+   Toast 提示组件样式 (Premium Glassmorphism)
+   ========================================== */
+.toast-container {
+  position: fixed;
+  top: 24px;
+  right: 24px;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  pointer-events: none;
+}
+
+.toast {
+  pointer-events: auto;
+  min-width: 300px;
+  max-width: 420px;
+  padding: 12px 16px;
+  border-radius: 8px;
+  background: rgba(255, 253, 247, 0.88);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  box-shadow: 0 8px 30px rgba(35, 33, 31, 0.08);
+  border: 1px solid rgba(214, 208, 197, 0.5);
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  animation: toast-in 0.35s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  transition: all 0.2s ease;
+}
+
+@keyframes toast-in {
+  from {
+    transform: translateY(-16px) scale(0.94);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0) scale(1);
+    opacity: 1;
+  }
+}
+
+.toast::before {
+  content: "";
+  width: 4px;
+  height: 16px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.toast.success::before {
+  background: var(--accent);
+}
+
+.toast.error::before {
+  background: var(--warning);
+}
+
+.toast.info::before {
+  background: var(--muted);
+}
+
+/* ==========================================
+   自定义确认模态框样式 (Custom Confirm Modal)
+   ========================================== */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(21, 21, 19, 0.45);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  z-index: 9998;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: fade-in 0.22s ease-out forwards;
+}
+
+.modal-card {
+  width: 90%;
+  max-width: 440px;
+  background: rgba(255, 253, 247, 0.96);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(214, 208, 197, 0.8);
+  border-radius: 12px;
+  padding: 24px;
+  box-shadow: 0 24px 60px rgba(21, 21, 19, 0.16);
+  animation: scale-in 0.28s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes scale-in {
+  from {
+    transform: scale(0.95) translateY(12px);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1) translateY(0);
+    opacity: 1;
+  }
+}
+
+.modal-header {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--ink);
+  margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.modal-body {
+  font-size: 14px;
+  color: var(--muted);
+  line-height: 1.6;
+  margin-bottom: 24px;
+}
+
+.modal-body strong {
+  color: var(--ink);
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
+.modal-actions button {
+  min-height: 38px;
+  border-radius: 6px;
+  padding: 0 18px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  border: none;
+}
+
+.modal-actions .cancel-btn {
+  background: var(--panel-strong);
+  border: 1px solid var(--line);
+  color: var(--ink);
+}
+
+.modal-actions .cancel-btn:hover {
+  background: var(--line);
+}
+
+.modal-actions .confirm-delete-btn {
+  background: var(--warning);
+  color: #fffaf0;
+}
+
+.modal-actions .confirm-delete-btn:hover {
+  background: #a34e24;
+}
+
+

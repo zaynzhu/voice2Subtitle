@@ -116,3 +116,8 @@ export function browseDirectory(): Promise<{ path: string }> {
   return request<{ path: string }>("/api/projects/browse", { method: "POST" });
 }
 
+export function deleteProject(projectId: number): Promise<{ message: string; id: number }> {
+  return request<{ message: string; id: number }>(`/api/projects/${projectId}`, { method: "DELETE" });
+}
+
+

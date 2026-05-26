@@ -77,3 +77,15 @@ def browse_directory():
             detail=f"无法打开系统文件夹选择框 ({str(e)})。请直接在输入框中输入物理文件夹路径。"
         )
 
+
+@router.delete("/{project_id}")
+def delete_project(project_id: int, session: Session = Depends(get_session)):
+    project = session.get(Project, project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    session.delete(project)
+    session.commit()
+    return {"message": "Project deleted successfully", "id": project_id}
+
+
