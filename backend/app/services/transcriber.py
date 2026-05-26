@@ -188,8 +188,18 @@ class OpenAIWhisperTranscriber(Transcriber):
     def _load_model(self) -> None:
         """懒加载 openai-whisper 模型。"""
         import whisper  # type: ignore[import-untyped]
+        from pathlib import Path
 
-        self._model = whisper.load_model(self._model_path, device=self._device)
+        # 智能解析出模型名字（如 "medium"）和保存目录（如 "E:\temp\测试翻译\whisper_model"）
+        path_obj = Path(self._model_path)
+        model_name = path_obj.stem
+        download_root = str(path_obj.parent)
+
+        self._model = whisper.load_model(
+            model_name,
+            device=self._device,
+            download_root=download_root,
+        )
 
     def transcribe(self, audio_path: str | Path) -> list[TranscriptSegment]:
         """对音频文件执行转录并返回片段列表。"""
