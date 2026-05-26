@@ -12,6 +12,7 @@ import {
   scanProject,
   updateSubtitle,
   unloadGpuMemory,
+  browseDirectory,
   type MediaItem,
   type Project,
   type SubtitleSegment
@@ -192,6 +193,22 @@ function App() {
     }
   }
 
+  async function handleBrowse() {
+    setBusy(true);
+    try {
+      const result = await browseDirectory();
+      if (result.path) {
+        setMediaRoot(result.path);
+        appendLog(`[系统] 已选定文件夹路径：${result.path}`);
+      }
+    } catch (error) {
+      appendLog(`[系统] 无法打开文件夹选择框，请手动在输入框中填写绝对路径。`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+
   async function handleSaveSubtitle() {
     if (!selectedSubtitle) return;
     setBusy(true);
@@ -234,11 +251,37 @@ function App() {
           </label>
           <label>
             视频文件夹路径
-            <input
-              value={mediaRoot}
-              onChange={(event) => setMediaRoot(event.target.value)}
-              placeholder="E:\\temp\\测试翻译"
-            />
+            <div style={{ display: "flex", gap: "8px", width: "100%", marginTop: "4px" }}>
+              <input
+                value={mediaRoot}
+                onChange={(event) => setMediaRoot(event.target.value)}
+                placeholder="E:\\temp\\测试翻译"
+                style={{ flex: 1, minWidth: 0 }}
+              />
+              <button
+                type="button"
+                disabled={busy}
+                onClick={handleBrowse}
+                style={{
+                  width: "auto",
+                  padding: "0 12px",
+                  whiteSpace: "nowrap",
+                  fontSize: "13px",
+                  height: "36px",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  backgroundColor: "rgba(255, 255, 255, 0.08)",
+                  border: "1px solid rgba(255, 255, 255, 0.12)",
+                  borderRadius: "6px",
+                  cursor: "pointer",
+                  color: "#fff",
+                  transition: "all 0.2s"
+                }}
+              >
+                选择...
+              </button>
+            </div>
           </label>
           <button className="primary" disabled={busy} onClick={handleCreateProject}>
             <FolderSearch size={16} />

@@ -111,3 +111,8 @@ export function exportMedia(mediaId: number): Promise<{ media_id: number; subtit
 export function unloadGpuMemory(): Promise<{ success: boolean; message: string }> {
   return request("/api/media/unload-gpu", { method: "POST" });
 }
+
+export function browseDirectory(): Promise<{ path: string }> {
+  return request<{ path: string }>("/api/projects/browse", { method: "POST" });
+}
+

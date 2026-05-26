@@ -52,3 +52,28 @@ def scan_project(project_id: int, session: Session = Depends(get_session)) -> Sc
         updated=stats.updated,
         skipped=stats.skipped,
     )
+
+
+@router.post("/browse")
+def browse_directory():
+    import os
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+        
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes('-topmost', True)
+        selected_dir = filedialog.askdirectory(title="选择视频文件夹")
+        root.destroy()
+        
+        if selected_dir:
+            normalized_path = os.path.normpath(selected_dir).replace('\\', '/')
+            return {"path": normalized_path}
+        return {"path": ""}
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"无法打开系统文件夹选择框 ({str(e)})。请直接在输入框中输入物理文件夹路径。"
+        )
+
