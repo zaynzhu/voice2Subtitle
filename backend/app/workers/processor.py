@@ -41,40 +41,38 @@ class SerialProcessor:
         """
         from app.models.entities import Job, MediaItem
 
-        session = self._session_factory()
-        try:
-            # 查询所有仍在运行状态的 Job
-            running_jobs: list[Job] = (
-                session.query(Job).filter(Job.status == "running").all()
-            )
-
-            if not running_jobs:
-                return 0
-
-            recovered_count = 0
-            for job in running_jobs:
-                # 将 Job 标记为 interrupted
-                job.status = "interrupted"
-                job.stage = "interrupted"
-
-                # 将对应的 MediaItem 标记为 failed
-                media_item: MediaItem | None = session.get(
-                    MediaItem, job.media_item_id
+        with self._session_factory() as session:
+            try:
+                # 查询所有仍在运行状态的 Job
+                running_jobs: list[Job] = (
+                    session.query(Job).filter(Job.status == "running").all()
                 )
-                if media_item is not None:
-                    media_item.status = "failed"
 
-                recovered_count += 1
+                if not running_jobs:
+                    return 0
 
-            session.commit()
-            logger.info("恢复了 %d 个被中断的 Job", recovered_count)
-            return recovered_count
-        except Exception:
-            session.rollback()
-            logger.exception("恢复中断 Job 时发生错误")
-            return 0
-        finally:
-            session.close()
+                recovered_count = 0
+                for job in running_jobs:
+                    # 将 Job 标记为 interrupted
+                    job.status = "interrupted"
+                    job.stage = "interrupted"
+
+                    # 将对应的 MediaItem 标记为 failed
+                    media_item: MediaItem | None = session.get(
+                        MediaItem, job.media_item_id
+                    )
+                    if media_item is not None:
+                        media_item.status = "failed"
+
+                    recovered_count += 1
+
+                session.commit()
+                logger.info("恢复了 %d 个被中断的 Job", recovered_count)
+                return recovered_count
+            except Exception:
+                session.rollback()
+                logger.exception("恢复中断 Job 时发生错误")
+                return 0
 
     def start(self) -> None:
         """启动后台 daemon 线程，运行 _worker_loop。"""
@@ -87,10 +85,13 @@ class SerialProcessor:
         self._thread.start()
         logger.info("SerialProcessor 后台 worker 线程已启动")
 
-    def stop(self) -> None:
-        """通知后台 worker 线程停止。"""
+    def stop(self, timeout: float | None = 5.0) -> None:
+        """通知后台 worker 线程停止并等待其退出。"""
         self._running = False
         logger.info("SerialProcessor 后台 worker 线程已请求停止")
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=timeout)
+            logger.info("SerialProcessor 后台 worker 线程已停止")
 
     def _worker_loop(self) -> None:
         """后台 worker 主循环。
@@ -112,27 +113,25 @@ class SerialProcessor:
                 continue
 
             logger.info("开始处理 media_item_id=%d", media_item_id)
-            session = self._session_factory()
             try:
-                # 查询对应的 MediaItem
-                media_item: MediaItem | None = session.get(
-                    MediaItem, media_item_id
-                )
-                if media_item is None:
-                    logger.warning(
-                        "media_item_id=%d 不存在，跳过本次处理", media_item_id
+                with self._session_factory() as session:
+                    # 查询对应的 MediaItem
+                    media_item: MediaItem | None = session.get(
+                        MediaItem, media_item_id
                     )
-                    continue
+                    if media_item is None:
+                        logger.warning(
+                            "media_item_id=%d 不存在，跳过本次处理", media_item_id
+                        )
+                        continue
 
-                # 调用 job pipeline 执行实际处理
-                run_processing_pipeline(session, media_item)
+                    # 调用 job pipeline 执行实际处理
+                    run_processing_pipeline(session, media_item)
                 logger.info("media_item_id=%d 处理完成", media_item_id)
             except Exception:
                 logger.exception(
                     "处理 media_item_id=%d 时发生异常", media_item_id
                 )
-            finally:
-                session.close()
 
         logger.info("SerialProcessor _worker_loop 已退出")
 
