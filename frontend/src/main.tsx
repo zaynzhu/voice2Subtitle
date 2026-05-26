@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { Captions, FolderSearch, Play, RefreshCw, Save, Settings, Wand2 } from "lucide-react";
+import { Captions, FolderSearch, Play, RefreshCw, Save, Settings, Wand2, Cpu } from "lucide-react";
 
 import {
   createProject,
@@ -11,6 +11,7 @@ import {
   processMedia,
   scanProject,
   updateSubtitle,
+  unloadGpuMemory,
   type MediaItem,
   type Project,
   type SubtitleSegment
@@ -179,6 +180,18 @@ function App() {
     }
   }
 
+  async function handleUnloadGpu() {
+    setBusy(true);
+    try {
+      const result = await unloadGpuMemory();
+      appendLog(`[系统] GPU 资源清理成功：${result.message}`);
+    } catch (error) {
+      appendLog(`[系统] 释放 GPU 资源失败：${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function handleSaveSubtitle() {
     if (!selectedSubtitle) return;
     setBusy(true);
@@ -276,6 +289,10 @@ function App() {
             <button disabled={!activeMedia || busy} onClick={handleExport}>
               <Save size={16} />
               导出
+            </button>
+            <button disabled={busy} onClick={handleUnloadGpu} title="释放 GPU 显存资源">
+              <Cpu size={16} />
+              释放显存
             </button>
           </div>
         </div>
