@@ -38,6 +38,13 @@ class JobQueue:
         with self._lock:
             return len(self._deque)
 
+    def clear(self) -> int:
+        """清空队列中所有待处理任务，返回被清除的任务数量。"""
+        with self._lock:
+            count = len(self._deque)
+            self._deque.clear()
+            return count
+
 
 # 模块级全局单例
 job_queue: JobQueue = JobQueue()

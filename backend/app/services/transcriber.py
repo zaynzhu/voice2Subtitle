@@ -249,8 +249,8 @@ class OpenAIWhisperTranscriber(Transcriber):
 def create_transcriber_from_settings(settings) -> Transcriber:
     """从 Settings 对象创建转录器实例。
 
-    根据 whisper_model 配置的路径或名称，智能识别是原生 openai-whisper 格式（.pt 模型）
-    还是 faster-whisper 格式（ctranslate2 模型），并返回对应的转录处理器。
+    根据可用引擎和模型文件格式，自动选择最佳转录处理器。
+    优先使用 faster-whisper（更快更省显存），openai-whisper 仅作为 .pt 文件的后备。
 
     Args:
         settings: 包含 whisper_model、whisper_device、whisper_compute_type
@@ -258,19 +258,75 @@ def create_transcriber_from_settings(settings) -> Transcriber:
 
     Returns:
         自适应配置好的 Transcriber 实例。
-    """
-    model_path = settings.whisper_model
-    is_openai_format = False
 
+    Raises:
+        ImportError: 需要的引擎未安装。
+        FileNotFoundError: 未找到任何模型文件。
+    """
+    # Detect available engines
+    has_faster_whisper = False
+    has_openai_whisper = False
+    try:
+        import faster_whisper  # noqa: F401
+        has_faster_whisper = True
+    except ModuleNotFoundError:
+        pass
+    try:
+        import whisper  # noqa: F401
+        has_openai_whisper = True
+    except ModuleNotFoundError:
+        pass
+
+    if not has_faster_whisper and not has_openai_whisper:
+        raise ImportError(
+            "未安装任何 Whisper 引擎。请安装 faster-whisper（推荐）或 openai-whisper。"
+        )
+
+    model_path = settings.whisper_model
+
+    # "auto" 模式：从 model_root 自动扫描，优先选可用引擎匹配的模型
+    if model_path == "auto":
+        model_root = Path(settings.model_root).resolve()
+        pt_files = list(model_root.glob("*.pt")) if model_root.is_dir() else []
+        ct2_dirs = [d for d in model_root.iterdir() if d.is_dir() and (d / "model.bin").exists()] if model_root.is_dir() else []
+
+        # Prefer CTranslate2 if engine available (faster, less VRAM)
+        if has_faster_whisper and ct2_dirs:
+            model_path = ct2_dirs[0].name
+        elif has_openai_whisper and pt_files:
+            model_path = str(pt_files[0])
+        elif has_faster_whisper and pt_files:
+            # No CT2 models but faster-whisper is available — download by name
+            model_path = pt_files[0].stem
+        elif ct2_dirs and not has_faster_whisper:
+            raise ImportError(
+                f"发现 CTranslate2 模型 {ct2_dirs[0].name}，但 faster-whisper 未安装。"
+                f"请运行: pip install faster-whisper"
+            )
+        elif pt_files and not has_openai_whisper:
+            raise ImportError(
+                f"发现 .pt 模型 {pt_files[0].name}，但 openai-whisper 未安装。"
+                f"请运行: pip install openai-whisper，或将模型转为 CTranslate2 格式。"
+            )
+        else:
+            raise FileNotFoundError(f"在 {model_root} 中未找到任何模型文件（.pt 或 CTranslate2 目录）")
+
+    # Check if path points to a .pt file
     path_obj = Path(model_path)
+    is_openai_format = False
     if path_obj.is_file() and path_obj.suffix == ".pt":
         is_openai_format = True
     elif path_obj.is_dir():
-        # 查找目录下是否有 .pt 文件（例如用户的 E:\temp\测试翻译\whisper_model 下有 medium.pt）
         pt_files = list(path_obj.glob("*.pt"))
         if pt_files:
             model_path = str(pt_files[0])
             is_openai_format = True
+
+    if is_openai_format and not has_openai_whisper:
+        raise ImportError(
+            f"模型 {model_path} 是 .pt 格式，需要 openai-whisper 引擎，但未安装。"
+            f"请运行: pip install openai-whisper，或将模型转为 CTranslate2 格式以使用 faster-whisper。"
+        )
 
     if is_openai_format:
         return OpenAIWhisperTranscriber(

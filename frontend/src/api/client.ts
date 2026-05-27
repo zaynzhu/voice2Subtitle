@@ -100,8 +100,49 @@ export function updateSubtitle(segmentId: number, payload: SubtitleEditPayload):
   });
 }
 
-export function processMedia(mediaId: number): Promise<{ job_id: number; media_item_id: number; stage: string }> {
+export function processMedia(mediaId: number): Promise<{ media_item_id: number; status: string; message: string }> {
   return request(`/api/media/${mediaId}/process`, { method: "POST" });
+}
+
+export type JobInfo = {
+  id: number;
+  type: string;
+  status: string;
+  stage: string;
+  progress: number | null;
+  error_code: string | null;
+  error_message: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  created_at: string;
+};
+
+export function listMediaJobs(mediaId: number): Promise<JobInfo[]> {
+  return request<JobInfo[]>(`/api/media/${mediaId}/jobs`);
+}
+
+export type ModelInfo = {
+  name: string;
+  type: string;
+  size_mb: number;
+};
+
+export type EngineStatus = {
+  available: string[];
+  faster_whisper: boolean;
+  openai_whisper: boolean;
+};
+
+export type ModelsResponse = {
+  model_root: string;
+  active_model: string;
+  models: ModelInfo[];
+  engines: EngineStatus;
+  gpu: { device: string; vram_mb: number } | null;
+};
+
+export function listModels(): Promise<ModelsResponse> {
+  return request<ModelsResponse>("/api/models");
 }
 
 export function exportMedia(mediaId: number): Promise<{ media_id: number; subtitle_path: string }> {
@@ -120,4 +161,11 @@ export function deleteProject(projectId: number): Promise<{ message: string; id:
   return request<{ message: string; id: number }>(`/api/projects/${projectId}`, { method: "DELETE" });
 }
 
+export function cancelJobs(): Promise<{ cancelled_jobs: number; cleared_queue: number; gpu_released: string }> {
+  return request<{ cancelled_jobs: number; cleared_queue: number; gpu_released: string }>("/api/jobs/cancel", { method: "POST" });
+}
 
+/** 构建媒体流 URL，用于 <video> 或 <audio> 的 src。 */
+export function getStreamUrl(mediaId: number): string {
+  return `/api/media/${mediaId}/stream`;
+}

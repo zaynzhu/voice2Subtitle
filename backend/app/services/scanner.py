@@ -7,7 +7,10 @@ from sqlalchemy.orm import Session
 
 from app.models.entities import MediaItem, Project
 
-VIDEO_EXTENSIONS = {".mkv", ".mp4", ".mov"}
+VIDEO_EXTENSIONS = {
+    ".mkv", ".mp4", ".mov", ".avi", ".wmv", ".flv", ".webm",
+    ".ts", ".mpg", ".mpeg", ".m4v", ".3gp", ".rmvb", ".rm",
+}
 
 
 @dataclass(frozen=True)

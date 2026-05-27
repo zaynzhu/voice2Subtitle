@@ -3,7 +3,7 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import exports, health, jobs, media, projects, subtitle_edits, subtitles
+from app.api import exports, health, jobs, media, models, projects, subtitle_edits, subtitles
 from app.db import SessionLocal, init_db
 from app.workers.processor import init_processor
 
@@ -16,7 +16,7 @@ def create_app() -> FastAPI:
 
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["http://127.0.0.1:5173", "http://localhost:5173"],
+        allow_origins=["http://127.0.0.1:19000", "http://localhost:19000"],
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -51,6 +51,7 @@ def create_app() -> FastAPI:
     app.include_router(subtitle_edits.router)
     app.include_router(jobs.router)
     app.include_router(exports.router)
+    app.include_router(models.router)
 
     # 动态探测并挂载前端静态文件目录
     from fastapi.staticfiles import StaticFiles

@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -12,6 +13,7 @@ from app.models.entities import Job, JobLog, MediaItem, SubtitleSegment
 from app.services.audio_extractor import extract_audio
 from app.services.media_probe import probe_media
 from app.services.subtitle_writer import write_srt
+from app.workers.processor import JobCancelled
 
 
 @dataclass(frozen=True)
@@ -29,7 +31,20 @@ def add_job_log(session: Session, job: Job, level: str, message: str) -> None:
     session.add(JobLog(job_id=job.id, level=level, message=message))
 
 
-def run_processing_pipeline(session: Session, media_item: MediaItem) -> PipelineResult:
+def _check_cancel(cancel_event: threading.Event, stage_name: str) -> None:
+    """检查取消信号，如果已设置则抛出 JobCancelled 异常。"""
+    if cancel_event.is_set():
+        raise JobCancelled(f"任务在 {stage_name} 阶段被用户取消")
+
+
+def run_processing_pipeline(
+    session: Session,
+    media_item: MediaItem,
+    cancel_event: threading.Event | None = None,
+) -> PipelineResult:
+    if cancel_event is None:
+        cancel_event = threading.Event()
+
     job = Job(
         media_item_id=media_item.id,
         type="process_media",
@@ -42,14 +57,16 @@ def run_processing_pipeline(session: Session, media_item: MediaItem) -> Pipeline
     session.flush()
 
     try:
-        print("[DEBUG] 步骤 1: 正在执行 ffprobe 探测媒体...", flush=True)
+        # 1. 探测媒体元数据
+        _check_cancel(cancel_event, "探测")
         add_job_log(session, job, "info", f"Probing media: {media_item.file_name}")
         probe = probe_media(media_item.file_path)
         media_item.duration_ms = probe.duration_ms
         media_item.status = "probing"
         session.flush()
 
-        print("[DEBUG] 步骤 2: 正在执行 ffmpeg 提取音频...", flush=True)
+        # 2. 提取音频
+        _check_cancel(cancel_event, "音频提取")
         audio_path = Path(settings.cache_dir) / f"{media_item.id}.mp3"
         add_job_log(session, job, "info", "Extracting audio")
         extract_audio(media_item.file_path, audio_path)
@@ -59,7 +76,7 @@ def run_processing_pipeline(session: Session, media_item: MediaItem) -> Pipeline
         session.flush()
 
         # 3. 语音转录
-        print("[DEBUG] 步骤 3: 正在装载 Whisper 模型并开始语音转录...", flush=True)
+        _check_cancel(cancel_event, "语音转录")
         add_job_log(session, job, "info", "Starting speech transcription")
         job.stage = "transcribing"
         media_item.status = "transcribing"
@@ -69,13 +86,13 @@ def run_processing_pipeline(session: Session, media_item: MediaItem) -> Pipeline
         transcriber = create_transcriber_from_settings(settings)
         segments = transcriber.transcribe(audio_path)
 
-        print(f"[DEBUG] 步骤 3 完成，共获得 {len(segments)} 条字幕段，正在保存转录结果...", flush=True)
+        # 转录完成后再次检查取消（转录本身不可中断，但后续步骤可以跳过）
+        _check_cancel(cancel_event, "转录完成")
+
         add_job_log(session, job, "info", f"Transcription complete. Got {len(segments)} segments. Saving segments...")
-        
-        # 清理可能已存在的旧字幕段，避免残留
-        from sqlalchemy import delete
+
         session.execute(delete(SubtitleSegment).where(SubtitleSegment.media_item_id == media_item.id))
-        
+
         db_segments = []
         for seg in segments:
             db_seg = SubtitleSegment(
@@ -88,14 +105,14 @@ def run_processing_pipeline(session: Session, media_item: MediaItem) -> Pipeline
             )
             session.add(db_seg)
             db_segments.append(db_seg)
-        
+
         job.progress = 0.60
         job.stage = "ready_for_translation"
         media_item.status = "transcribed"
         session.flush()
 
         # 4. 字幕翻译
-        print(f"[DEBUG] 步骤 4: 正在启动字幕翻译，源语言: {media_item.source_language} -> 目标语言: {media_item.target_language}...", flush=True)
+        _check_cancel(cancel_event, "翻译")
         add_job_log(session, job, "info", f"Starting translation from {media_item.source_language} to {media_item.target_language}")
         job.stage = "translating"
         media_item.status = "translating"
@@ -126,10 +143,8 @@ def run_processing_pipeline(session: Session, media_item: MediaItem) -> Pipeline
                 add_job_log(session, job, "warning", f"Segment {res.index_no} translation failed: {res.error}")
 
         if failed_count > 0:
-            print(f"[DEBUG] 步骤 4 完成，翻译结束，但有 {failed_count} 句翻译失败", flush=True)
             add_job_log(session, job, "warning", f"Translation complete with {failed_count} segments failed")
         else:
-            print("[DEBUG] 步骤 4 完成，全部字幕段翻译成功！", flush=True)
             add_job_log(session, job, "info", "Translation complete successfully")
 
         job.progress = 0.90
@@ -138,7 +153,7 @@ def run_processing_pipeline(session: Session, media_item: MediaItem) -> Pipeline
         session.flush()
 
         # 5. 导出字幕为 SRT
-        print("[DEBUG] 步骤 5: 正在导出字幕为 srt 物理文件...", flush=True)
+        _check_cancel(cancel_event, "导出")
         add_job_log(session, job, "info", "Exporting subtitles to SRT file")
         job.stage = "exporting_subtitles"
         session.flush()
@@ -153,9 +168,19 @@ def run_processing_pipeline(session: Session, media_item: MediaItem) -> Pipeline
         job.finished_at = utc_now()
         media_item.status = "ready_for_review"
         add_job_log(session, job, "info", f"Job pipeline completed successfully. Subtitles saved to: {output_srt_path}")
-        
+
         session.commit()
         return PipelineResult(job_id=job.id, media_item_id=media_item.id, stage="completed")
+
+    except JobCancelled:
+        job.status = "cancelled"
+        job.stage = "cancelled"
+        job.error_message = "任务被用户主动取消"
+        job.finished_at = utc_now()
+        media_item.status = "failed"
+        add_job_log(session, job, "warning", "Job cancelled by user")
+        session.commit()
+        raise
 
     except Exception as exc:
         job.status = "failed"

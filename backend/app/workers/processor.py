@@ -9,25 +9,37 @@ from app.workers.queue import JobQueue
 logger = logging.getLogger(__name__)
 
 
+class JobCancelled(Exception):
+    """任务被用户主动取消时抛出的异常。"""
+
+
 class SerialProcessor:
     """串行 Worker 处理器。
 
     每次从 JobQueue 中取出一个 media_item_id，
     创建新的数据库 session，调用 run_processing_pipeline 执行处理。
     通过后台 daemon 线程保持持续运行。
+    支持通过 cancel_current() 取消当前正在执行的任务。
     """
 
     def __init__(self, session_factory, queue: JobQueue) -> None:
-        """初始化串行处理器。
-
-        Args:
-            session_factory: 可调用对象，调用后返回一个新的 SQLAlchemy Session（即 SessionLocal）。
-            queue: JobQueue 实例，提供待处理的 media_item_id。
-        """
         self._session_factory = session_factory
         self._queue = queue
         self._running: bool = False
         self._thread: threading.Thread | None = None
+        self._cancel_event = threading.Event()
+
+    def cancel_current(self) -> dict:
+        """取消当前正在执行的任务并清空队列中所有等待任务。
+
+        Returns:
+            包含 cancelled_count 和 cleared_count 的字典。
+        """
+        logger.info("收到取消当前任务的请求")
+        self._cancel_event.set()
+        cleared = self._queue.clear()
+        logger.info("已清空队列中 %d 个等待任务", cleared)
+        return {"cleared_queue": cleared}
 
     def recover_interrupted_jobs(self) -> int:
         """恢复被意外中断的 Job。
@@ -43,7 +55,6 @@ class SerialProcessor:
 
         with self._session_factory() as session:
             try:
-                # 查询所有仍在运行状态的 Job
                 running_jobs: list[Job] = (
                     session.query(Job).filter(Job.status == "running").all()
                 )
@@ -53,11 +64,9 @@ class SerialProcessor:
 
                 recovered_count = 0
                 for job in running_jobs:
-                    # 将 Job 标记为 interrupted
                     job.status = "interrupted"
                     job.stage = "interrupted"
 
-                    # 将对应的 MediaItem 标记为 failed
                     media_item: MediaItem | None = session.get(
                         MediaItem, job.media_item_id
                     )
@@ -98,6 +107,7 @@ class SerialProcessor:
 
         持续从队列中取出 media_item_id 并调用 pipeline 处理。
         队列为空时每秒轮询一次。
+        支持通过 cancel_event 取消当前任务。
         """
         from app.models.entities import MediaItem
         from app.services.job_pipeline import run_processing_pipeline
@@ -107,7 +117,6 @@ class SerialProcessor:
         while self._running:
             media_item_id = self._queue.dequeue()
 
-            # 队列为空，等待 1 秒后继续
             if media_item_id is None:
                 time.sleep(1)
                 continue
@@ -115,7 +124,6 @@ class SerialProcessor:
             logger.info("开始处理 media_item_id=%d", media_item_id)
             try:
                 with self._session_factory() as session:
-                    # 查询对应的 MediaItem
                     media_item: MediaItem | None = session.get(
                         MediaItem, media_item_id
                     )
@@ -125,9 +133,11 @@ class SerialProcessor:
                         )
                         continue
 
-                    # 调用 job pipeline 执行实际处理
-                    run_processing_pipeline(session, media_item)
+                    run_processing_pipeline(session, media_item, cancel_event=self._cancel_event)
                 logger.info("media_item_id=%d 处理完成", media_item_id)
+            except JobCancelled:
+                logger.info("media_item_id=%d 的任务已被用户取消", media_item_id)
+                self._cancel_event.clear()
             except Exception:
                 logger.exception(
                     "处理 media_item_id=%d 时发生异常", media_item_id
@@ -141,14 +151,7 @@ processor: SerialProcessor | None = None
 
 
 def init_processor(session_factory) -> SerialProcessor:
-    """初始化全局 SerialProcessor 单例并返回。
-
-    Args:
-        session_factory: 可调用对象，调用后返回新的 SQLAlchemy Session（即 SessionLocal）。
-
-    Returns:
-        初始化完成的 SerialProcessor 实例。
-    """
+    """初始化全局 SerialProcessor 单例并返回。"""
     global processor
     from app.workers.queue import job_queue
 

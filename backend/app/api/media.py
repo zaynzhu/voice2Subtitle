@@ -1,4 +1,7 @@
+from pathlib import Path
+
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -7,6 +10,34 @@ from app.models.entities import MediaItem, Project
 from app.models.schemas import MediaItemRead
 
 router = APIRouter(prefix="/api", tags=["media"])
+
+STREAMABLE_EXTENSIONS = {
+    ".mp4", ".mkv", ".mov", ".avi", ".wmv", ".flv", ".webm",
+    ".ts", ".mpg", ".mpeg", ".m4v", ".3gp",
+    ".mp3", ".wav", ".aac", ".flac", ".m4a", ".ogg", ".wma",
+}
+
+MIME_MAP = {
+    ".mp4": "video/mp4",
+    ".mkv": "video/x-matroska",
+    ".mov": "video/quicktime",
+    ".avi": "video/x-msvideo",
+    ".wmv": "video/x-ms-wmv",
+    ".flv": "video/x-flv",
+    ".webm": "video/webm",
+    ".ts": "video/mp2t",
+    ".mpg": "video/mpeg",
+    ".mpeg": "video/mpeg",
+    ".m4v": "video/x-m4v",
+    ".3gp": "video/3gpp",
+    ".mp3": "audio/mpeg",
+    ".wav": "audio/wav",
+    ".aac": "audio/aac",
+    ".flac": "audio/flac",
+    ".m4a": "audio/mp4",
+    ".ogg": "audio/ogg",
+    ".wma": "audio/x-ms-wma",
+}
 
 
 @router.get("/projects/{project_id}/media", response_model=list[MediaItemRead])
@@ -62,3 +93,27 @@ def unload_gpu_memory() -> dict:
             else "GC executed. No active CUDA device found."
         ),
     }
+
+
+@router.get("/media/{media_id}/stream")
+def stream_media(media_id: int, session: Session = Depends(get_session)):
+    """流式传输媒体文件，支持 HTTP Range 请求以便视频拖动进度条。"""
+    item = session.get(MediaItem, media_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Media item not found")
+
+    file_path = Path(item.file_path)
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="File not found on disk")
+
+    suffix = file_path.suffix.lower()
+    if suffix not in STREAMABLE_EXTENSIONS:
+        raise HTTPException(status_code=415, detail=f"Unsupported media format: {suffix}")
+
+    mime_type = MIME_MAP.get(suffix, "application/octet-stream")
+
+    return FileResponse(
+        path=str(file_path),
+        media_type=mime_type,
+        filename=file_path.name,
+    )

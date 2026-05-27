@@ -1,10 +1,11 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { Captions, FolderSearch, Play, RefreshCw, Save, Settings, Wand2, Cpu, Trash2 } from "lucide-react";
+import { Captions, FolderSearch, Play, RefreshCw, Save, Settings, Wand2, Cpu, Trash2, CheckSquare, Square, Box, OctagonX } from "lucide-react";
 
 import {
   createProject,
   exportMedia,
+  getStreamUrl,
   listMedia,
   listProjects,
   listSubtitles,
@@ -14,9 +15,14 @@ import {
   unloadGpuMemory,
   browseDirectory,
   deleteProject,
+  listMediaJobs,
+  listModels,
+  cancelJobs,
   type MediaItem,
   type Project,
-  type SubtitleSegment
+  type SubtitleSegment,
+  type JobInfo,
+  type ModelsResponse
 } from "./api/client";
 import "./styles/app.css";
 
@@ -54,12 +60,19 @@ function App() {
   const [editEditedText, setEditEditedText] = useState("");
   const [editStartMs, setEditStartMs] = useState("0");
   const [editEndMs, setEditEndMs] = useState("0");
-  const [projectName, setProjectName] = useState("本地字幕项目");
+  const [projectName, setProjectName] = useState("Voice2Subtitle");
   const [mediaRoot, setMediaRoot] = useState("");
+  const [selectedMediaIds, setSelectedMediaIds] = useState<Set<number>>(new Set());
   const [logLines, setLogLines] = useState<string[]>(["等待连接后端。"]);
   const [busy, setBusy] = useState(false);
+  const [activeJobs, setActiveJobs] = useState<Map<number, JobInfo>>(new Map());
+  const [seenJobStages, setSeenJobStages] = useState<Map<number, string>>(new Map());
+  const [modelsInfo, setModelsInfo] = useState<ModelsResponse | null>(null);
 
   const [toasts, setToasts] = useState<{ id: string; message: string; type: "success" | "error" | "info" }[]>([]);
+
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const [currentSubtitle, setCurrentSubtitle] = useState<SubtitleSegment | null>(null);
 
   function showToast(message: string, type: "success" | "error" | "info" = "info") {
     const id = Math.random().toString(36).substring(2, 9);
@@ -102,6 +115,13 @@ function App() {
         appendLog(`后端连接失败：${error.message}`);
         showToast(`后端连接失败：${error.message}`, "error");
       });
+    listModels()
+      .then((info) => {
+        setModelsInfo(info);
+        if (info.gpu) appendLog(`GPU: ${info.gpu.device} (${info.gpu.vram_mb} MB)`);
+        if (info.models.length > 0) appendLog(`已发现 ${info.models.length} 个本地模型`);
+      })
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -131,6 +151,57 @@ function App() {
     setEditStartMs(String(selectedSubtitle.start_ms));
     setEditEndMs(String(selectedSubtitle.end_ms));
   }, [selectedSubtitle?.id]);
+
+  // Poll active jobs for progress updates
+  useEffect(() => {
+    const hasRunning = [...activeJobs.values()].some(
+      (j) => j.status === "running" || j.status === "queued"
+    );
+    if (!hasRunning && activeJobs.size === 0) return;
+
+    const timer = setInterval(async () => {
+      const nextJobs = new Map<number, JobInfo>();
+      let anyRunning = false;
+
+      for (const mediaItem of mediaItems) {
+        try {
+          const jobs = await listMediaJobs(mediaItem.id);
+          const latest = jobs[0];
+          if (!latest) continue;
+          nextJobs.set(mediaItem.id, latest);
+
+          const prevStage = seenJobStages.get(latest.id);
+          if (prevStage !== latest.stage) {
+            setSeenJobStages((m) => new Map(m).set(latest.id, latest.stage));
+            if (latest.stage && latest.status === "running") {
+              appendLog(`[${mediaItem.file_name}] ${latest.stage}${latest.progress != null ? ` (${latest.progress}%)` : ""}`);
+            }
+          }
+
+          if (latest.status === "running" || latest.status === "queued") {
+            anyRunning = true;
+          } else if (latest.status === "succeeded" && prevStage !== "completed") {
+            setSeenJobStages((m) => new Map(m).set(latest.id, "completed"));
+            appendLog(`[${mediaItem.file_name}] 处理完成`);
+            showToast(`${mediaItem.file_name} 处理完成`, "success");
+            if (activeProject) refreshMedia(activeProject);
+          } else if (latest.status === "failed" && prevStage !== "failed") {
+            setSeenJobStages((m) => new Map(m).set(latest.id, "failed"));
+            appendLog(`[${mediaItem.file_name}] 处理失败：${latest.error_message || "未知错误"}`);
+            showToast(`${mediaItem.file_name} 处理失败`, "error");
+            if (activeProject) refreshMedia(activeProject);
+          }
+        } catch {
+          // skip unreachable media
+        }
+      }
+
+      setActiveJobs(nextJobs);
+      if (!anyRunning) clearInterval(timer);
+    }, 3000);
+
+    return () => clearInterval(timer);
+  }, [mediaItems, activeJobs.size]);
 
   function handleDeleteProject(projectId: number, event: React.MouseEvent) {
     event.stopPropagation();
@@ -176,7 +247,7 @@ function App() {
     setBusy(true);
     try {
       const project = await createProject({
-        name: projectName.trim() || "本地字幕项目",
+        name: projectName.trim() || "Voice2Subtitle",
         media_root: mediaRoot.trim(),
         output_mode: "beside_video"
       });
@@ -210,18 +281,28 @@ function App() {
   }
 
   async function handleProcess() {
-    if (!activeMedia) return;
+    const ids = selectedMediaIds.size > 0 ? [...selectedMediaIds] : activeMedia ? [activeMedia.id] : [];
+    if (ids.length === 0) return;
     setBusy(true);
-    try {
-      const result = await processMedia(activeMedia.id);
-      appendLog(`已发起处理任务：#${result.job_id}，阶段 ${result.stage}。`);
-      showToast(`任务已成功投递至后台队列 (Job #${result.job_id})`, "success");
-    } catch (error) {
-      appendLog(`处理失败：${error instanceof Error ? error.message : String(error)}`);
-      showToast(`发起处理任务失败：${error instanceof Error ? error.message : String(error)}`, "error");
-    } finally {
-      setBusy(false);
+    let ok = 0, fail = 0;
+    for (const id of ids) {
+      try {
+        await processMedia(id);
+        appendLog(`已发起处理任务 (media #${id})`);
+        setActiveJobs((prev) => {
+          const next = new Map(prev);
+          next.set(id, { id: 0, type: "", status: "queued", stage: "queued", progress: null, error_code: null, error_message: null, started_at: null, finished_at: null, created_at: "" } as JobInfo);
+          return next;
+        });
+        ok++;
+      } catch (error) {
+        appendLog(`处理失败：${error instanceof Error ? error.message : String(error)}`);
+        fail++;
+      }
     }
+    if (ok > 0) showToast(`已投递 ${ok} 个处理任务到后台队列`, "success");
+    if (fail > 0) showToast(`${fail} 个任务投递失败`, "error");
+    setBusy(false);
   }
 
   async function handleExport() {
@@ -251,6 +332,25 @@ function App() {
     } catch (error) {
       appendLog(`[系统] 释放 GPU 资源失败：${error instanceof Error ? error.message : String(error)}`);
       showToast(`释放 GPU 显存失败：${error instanceof Error ? error.message : String(error)}`, "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleCancelJobs() {
+    setBusy(true);
+    try {
+      const result = await cancelJobs();
+      const msg = `已取消 ${result.cancelled_jobs} 个任务，清空 ${result.cleared_queue} 个排队任务。${result.gpu_released}`;
+      appendLog(`[系统] ${msg}`);
+      showToast("任务已终止，GPU 显存已释放", "success");
+      if (activeProject) refreshMedia(activeProject);
+      // 清除 job 轮询状态
+      setActiveJobs(new Map());
+      setSeenJobStages(new Map());
+    } catch (error) {
+      appendLog(`[系统] 终止任务失败：${error instanceof Error ? error.message : String(error)}`);
+      showToast(`终止任务失败：${error instanceof Error ? error.message : String(error)}`, "error");
     } finally {
       setBusy(false);
     }
@@ -312,6 +412,108 @@ function App() {
           </div>
         </div>
 
+        <section className="panel media-queue-panel">
+          <div className="panel-title">
+            <span style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+              <Box size={16} />
+              Media Queue
+            </span>
+          </div>
+          <div className="media-queue-grid">
+            <button 
+              className="primary" 
+              disabled={!activeProject || busy} 
+              onClick={handleScan}
+            >
+              <RefreshCw size={14} />
+              扫描
+            </button>
+            <button
+              disabled={mediaItems.length === 0 || busy}
+              onClick={() => {
+                setSelectedMediaIds((prev) =>
+                  prev.size === mediaItems.length ? new Set() : new Set(mediaItems.map((m) => m.id))
+                );
+              }}
+              title={selectedMediaIds.size === mediaItems.length ? "取消全选" : "全选"}
+            >
+              {selectedMediaIds.size === mediaItems.length ? <CheckSquare size={14} /> : <Square size={14} />}
+              {selectedMediaIds.size > 0 ? `已选 ${selectedMediaIds.size}` : "全选"}
+            </button>
+            <button 
+              disabled={(!activeMedia && selectedMediaIds.size === 0) || busy} 
+              onClick={handleProcess}
+            >
+              <Wand2 size={14} />
+              处理{selectedMediaIds.size > 0 ? ` (${selectedMediaIds.size})` : ""}
+            </button>
+            <button 
+              disabled={!activeMedia || busy} 
+              onClick={handleExport}
+            >
+              <Save size={14} />
+              导出
+            </button>
+            <button
+              className="full-width danger"
+              disabled={busy}
+              onClick={handleCancelJobs}
+              title="终止当前任务并释放 GPU 显存"
+            >
+              <OctagonX size={14} />
+              终止任务
+            </button>
+            <button
+              className="full-width"
+              disabled={busy}
+              onClick={handleUnloadGpu}
+              title="释放 GPU 显存资源"
+            >
+              <Cpu size={14} />
+              释放显存
+            </button>
+          </div>
+        </section>
+
+        <div className="model-card">
+          {modelsInfo ? (
+            <>
+              <div className="model-card-header">
+                <Box size={14} />
+                <span>模型</span>
+                {modelsInfo.gpu && <span className="gpu-badge">{modelsInfo.gpu.device}</span>}
+              </div>
+              <div className="engine-badges">
+                <span className={`engine-badge ${modelsInfo.engines.faster_whisper ? "on" : "off"}`}>
+                  CT2{modelsInfo.engines.faster_whisper ? "" : " ✗"}
+                </span>
+                <span className={`engine-badge ${modelsInfo.engines.openai_whisper ? "on" : "off"}`}>
+                  PT{modelsInfo.engines.openai_whisper ? "" : " ✗"}
+                </span>
+              </div>
+              {modelsInfo.models.length > 0 ? (
+                <div className="model-list">
+                  {modelsInfo.models.map((m) => {
+                    const engineOk = m.type === "openai-whisper" ? modelsInfo.engines.openai_whisper : m.type === "ctranslate2" ? modelsInfo.engines.faster_whisper : true;
+                    return (
+                      <div key={m.name} className={`model-item ${!engineOk ? "unavailable" : m.name === modelsInfo.active_model ? "active" : ""}`}>
+                        <span className="model-name">{m.name}</span>
+                        <span className="model-meta">
+                          {m.type === "openai-whisper" ? "PT" : m.type === "ctranslate2" ? "CT2" : "?"} &middot; {m.size_mb >= 1000 ? `${(m.size_mb / 1000).toFixed(1)} GB` : `${m.size_mb} MB`}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="model-empty">未发现本地模型，请将模型放入 whisper_model/</div>
+              )}
+            </>
+          ) : (
+            <div className="model-empty">正在检测模型...</div>
+          )}
+        </div>
+
         <section className="panel project-form">
           <label>
             项目名
@@ -360,6 +562,7 @@ function App() {
                   onClick={() => {
                     setActiveProject(project);
                     setActiveMedia(null);
+                    setSelectedMediaIds(new Set());
                   }}
                 >
                   <strong>{project.name}</strong>
@@ -381,58 +584,85 @@ function App() {
 
       <section className="media-column">
         <div className="toolbar">
-          <div>
-            <span className="eyebrow">Media Queue</span>
-            <h1>{activeProject?.name ?? "未选择项目"}</h1>
-          </div>
-          <div className="actions">
-            <button disabled={!activeProject || busy} onClick={handleScan}>
-              <RefreshCw size={16} />
-              扫描
-            </button>
-            <button disabled={!activeMedia || busy} onClick={handleProcess}>
-              <Wand2 size={16} />
-              处理
-            </button>
-            <button disabled={!activeMedia || busy} onClick={handleExport}>
-              <Save size={16} />
-              导出
-            </button>
-            <button disabled={busy} onClick={handleUnloadGpu} title="释放 GPU 显存资源">
-              <Cpu size={16} />
-              释放显存
-            </button>
-          </div>
+          <h1>
+            {activeProject?.name ?? "未选择项目"}
+            <span className="media-count">({mediaItems.length})</span>
+          </h1>
         </div>
 
         <div className="media-list">
           {mediaItems.map((item) => (
-            <button
+            <div
               className={item.id === activeMedia?.id ? "media-row active" : "media-row"}
               key={item.id}
               onClick={() => setActiveMedia(item)}
             >
+              <input
+                type="checkbox"
+                checked={selectedMediaIds.has(item.id)}
+                onChange={(e) => {
+                  e.stopPropagation();
+                  setSelectedMediaIds((prev) => {
+                    const next = new Set(prev);
+                    if (next.has(item.id)) next.delete(item.id);
+                    else next.add(item.id);
+                    return next;
+                  });
+                }}
+                onClick={(e) => e.stopPropagation()}
+              />
               <span className={`status-dot ${item.status}`} />
               <span className="file-name">{item.file_name}</span>
               <span>{formatDuration(item.duration_ms)}</span>
               <span>{item.status}</span>
               <span>{item.subtitle_path ? "SRT" : "No subtitle"}</span>
-            </button>
+            </div>
+          ))}
+        </div>
+        <div className="log-panel" ref={(el) => { if (el) el.scrollTop = el.scrollHeight; }}>
+          {logLines.map((line, index) => (
+            <div key={`${line}-${index}`}>{line}</div>
           ))}
         </div>
       </section>
 
       <section className="review-column">
         <div className="player-shell">
-          <div className="video-placeholder">
-            <Play size={42} />
-            <span>{activeMedia?.file_name ?? "选择一个视频后开始预览"}</span>
-          </div>
-          <div className="subtitle-overlay">
-            {selectedSubtitle
-              ? selectedSubtitle.edited_text || selectedSubtitle.translated_text || selectedSubtitle.source_text
-              : "字幕预览将在这里显示"}
-          </div>
+          {activeMedia ? (
+            <div className="video-container">
+              <video
+                ref={videoRef}
+                key={activeMedia.id}
+                src={getStreamUrl(activeMedia.id)}
+                controls
+                preload="metadata"
+                onTimeUpdate={() => {
+                  const t = videoRef.current?.currentTime;
+                  if (t == null || subtitles.length === 0) { setCurrentSubtitle(null); return; }
+                  const ms = t * 1000;
+                  const seg = subtitles.find(s => ms >= s.start_ms && ms < s.end_ms);
+                  setCurrentSubtitle(seg ?? null);
+                }}
+              />
+              <div className={`subtitle-overlay ${currentSubtitle ? "visible" : ""}`}>
+                {currentSubtitle && (
+                  <>
+                    <span className="subtitle-primary">
+                      {currentSubtitle.edited_text || currentSubtitle.translated_text || currentSubtitle.source_text}
+                    </span>
+                    {currentSubtitle.source_text && (currentSubtitle.edited_text || currentSubtitle.translated_text) && (
+                      <span className="subtitle-secondary">{currentSubtitle.source_text}</span>
+                    )}
+                  </>
+                )}
+              </div>
+            </div>
+          ) : (
+            <div className="video-placeholder">
+              <Play size={16} />
+              <span>未选择视频</span>
+            </div>
+          )}
         </div>
 
         <div className="editor-panel">
@@ -456,7 +686,12 @@ function App() {
                 <button
                   className={segment.id === selectedSubtitle?.id ? "subtitle-row selected" : "subtitle-row"}
                   key={segment.id}
-                  onClick={() => setSelectedSubtitleId(segment.id)}
+                  onClick={() => {
+                    setSelectedSubtitleId(segment.id);
+                    if (videoRef.current) {
+                      videoRef.current.currentTime = segment.start_ms / 1000;
+                    }
+                  }}
                 >
                   <span>{segment.index_no}</span>
                   <span>{formatTimestamp(segment.start_ms)}</span>
@@ -477,36 +712,32 @@ function App() {
           </div>
           {selectedSubtitle ? (
             <div className="subtitle-edit-form">
+              <div className="time-row">
+                <label>
+                  开始时间（毫秒）
+                  <input value={editStartMs} onChange={(event) => setEditStartMs(event.target.value)} />
+                </label>
+                <label>
+                  结束时间（毫秒）
+                  <input value={editEndMs} onChange={(event) => setEditEndMs(event.target.value)} />
+                </label>
+              </div>
               <label>
-                开始时间（毫秒）
-                <input value={editStartMs} onChange={(event) => setEditStartMs(event.target.value)} />
-              </label>
-              <label>
-                结束时间（毫秒）
-                <input value={editEndMs} onChange={(event) => setEditEndMs(event.target.value)} />
-              </label>
-              <label>
-                原文
-                <textarea value={editSourceText} onChange={(event) => setEditSourceText(event.target.value)} />
+                原文（只读）
+                <textarea className="source-text" value={editSourceText} readOnly />
               </label>
               <label>
                 译文
                 <textarea value={editTranslatedText} onChange={(event) => setEditTranslatedText(event.target.value)} />
               </label>
               <label>
-                最终文本
+                最终文本（优先使用）
                 <textarea value={editEditedText} onChange={(event) => setEditEditedText(event.target.value)} />
               </label>
             </div>
           ) : (
             <div className="empty-state">选择一条字幕后可以直接编辑。</div>
           )}
-        </div>
-
-        <div className="log-panel">
-          {logLines.map((line, index) => (
-            <div key={`${line}-${index}`}>{line}</div>
-          ))}
         </div>
       </section>
     </main>
