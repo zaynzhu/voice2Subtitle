@@ -1,8 +1,31 @@
-# Voice2Subtitle
+<div align="center">
 
-本地视频字幕工作站 — 扫描本地视频文件夹，提取音频，语音转录（Whisper 双引擎），自动翻译，双语字幕编辑，导出 SRT。100% 离线运行。
+# 🐍 Voice2Subtitle
 
-## 功能特性
+本地视频转字幕工作站 — 100% 离线运行
+
+[English](README_EN.md) | [中文](README.md)
+
+</div>
+
+<div align="center">
+
+![License](https://img.shields.io/github/license/zaynzhu/voice2Subtitle?style=for-the-badge)
+![Stars](https://img.shields.io/github/stars/zaynzhu/voice2Subtitle?style=for-the-badge)
+![Last Commit](https://img.shields.io/github/last-commit/zaynzhu/voice2Subtitle?style=for-the-badge)
+![Issues](https://img.shields.io/github/issues/zaynzhu/voice2Subtitle?style=for-the-badge)
+
+</div>
+
+---
+
+> [!TIP]
+> 扫描本地视频文件夹，自动提取音频、语音转录（Whisper 双引擎）、翻译、生成双语字幕。
+> 内置视频播放器实时叠加字幕，支持手动编辑后导出标准 SRT。针对低显存 GPU 优化，RTX 3050Ti 4GB 即可流畅运行。
+
+---
+
+## ✨ Features
 
 - **双引擎语音转录** — 自动检测 `faster-whisper`（CTranslate2）和 `openai-whisper`（PyTorch .pt）可用性，匹配本地模型格式
 - **自动翻译** — 接入 Google Translate，支持多语言互译，异常句自动跳过不中断流程
@@ -13,44 +36,41 @@
 - **任务取消** — 随时终止正在运行的转录任务，清除队列，释放 GPU 资源
 - **SRT 导出** — 一键导出标准 SRT 字幕文件，存放于视频同级目录
 
-## 快速开始
+---
 
-### 环境要求
-
-- Python 3.11+
-- Node.js 18+（前端开发）
-- FFmpeg（音频提取）
-- CUDA 可选（GPU 加速转录）
-
-### 安装
+## 🚀 Quick Start
 
 ```bash
 # 克隆仓库
 git clone https://github.com/zaynzhu/voice2Subtitle.git
 cd voice2Subtitle
 
-# 后端依赖
-cd backend
-pip install -e ".[ml]"          # 含 ML 依赖（faster-whisper）
-# 或 pip install -e .           # 仅核心依赖，需手动安装 whisper
+# 安装后端依赖
+cd backend && pip install -e ".[ml]"
 
-# 前端依赖
-cd ../frontend
-npm install
+# 安装前端依赖
+cd ../frontend && npm install
+
+# 启动（项目根目录）
+cd ..
+python start-backend.py          # 后端：自动选择最佳 Python 环境
+# 另开终端
+cd frontend && npm run dev       # 前端：http://127.0.0.1:19000
 ```
 
-### 启动
+---
 
-**方式一：智能启动脚本（推荐）**
+## 📦 Installation
+
+### 智能启动脚本（推荐）
 
 ```bash
-# 项目根目录，自动选择最佳 Python 环境
 python start-backend.py
-# 另开终端
-cd frontend && npm run dev
 ```
 
-**方式二：手动启动**
+自动搜索 PATH + conda 中引擎最全的 Python 环境，无需手动配置。
+
+### 手动启动
 
 ```bash
 # 后端（backend/ 目录）
@@ -60,14 +80,21 @@ python -m uvicorn app.main:app --host 127.0.0.1 --port 19001 --reload
 npm run dev
 ```
 
-**方式三：生产部署**
+### 生产部署
 
 ```bash
 cd frontend && npm run build    # 构建前端
 cd ../backend
 python -m uvicorn app.main:app --host 127.0.0.1 --port 19000
-# 后端自动挂载 frontend/dist/ 作为静态文件，访问 http://127.0.0.1:19000
+# 后端自动挂载 frontend/dist/ 作为静态文件
 ```
+
+### Requirements
+
+- Python 3.11+
+- Node.js 18+
+- FFmpeg（音频提取）
+- CUDA 可选（GPU 加速转录）
 
 ### Whisper 模型
 
@@ -82,9 +109,34 @@ whisper_model/
     └── ...
 ```
 
-设置 `V2S_WHISPER_MODEL=auto`（默认）会自动扫描该目录。也可指定具体模型名如 `V2S_WHISPER_MODEL=medium`。
+设置 `V2S_WHISPER_MODEL=auto`（默认）会自动扫描该目录。
 
-## 项目结构
+---
+
+## 💡 Usage
+
+### 扫描视频并批量处理
+
+1. 启动后打开 http://127.0.0.1:19000
+2. 点击「新建项目」，选择本地视频文件夹
+3. 勾选要处理的视频，点击「批量处理」
+4. 等待转录完成，视频播放器中实时查看字幕
+
+### 编辑字幕并导出
+
+1. 在播放器中点击字幕行跳转到对应画面
+2. 右侧字幕列表中直接编辑原文或译文
+3. 点击「导出 SRT」保存到视频同级目录
+
+### GPU 显存管理
+
+侧边栏模型卡片显示当前引擎状态和 GPU 信息，点击「释放显存」按钮即可清空显存占用。
+
+---
+
+## 📚 Documentation
+
+### 项目结构
 
 ```
 voice2Subtitle/
@@ -108,9 +160,9 @@ voice2Subtitle/
 └── .env.example            # 环境变量示例
 ```
 
-## API 接口
+### API 接口
 
-### 项目管理
+#### 项目管理
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
@@ -120,7 +172,7 @@ voice2Subtitle/
 | `POST` | `/api/projects/{id}/scan` | 扫描视频文件 |
 | `POST` | `/api/projects/browse` | 打开文件夹选择对话框 |
 
-### 媒体操作
+#### 媒体操作
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
@@ -131,7 +183,7 @@ voice2Subtitle/
 | `POST` | `/api/media/{id}/export` | 导出 SRT 文件 |
 | `POST` | `/api/media/unload-gpu` | 释放 GPU 显存 |
 
-### 任务与字幕
+#### 任务与字幕
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
@@ -141,9 +193,7 @@ voice2Subtitle/
 | `PATCH` | `/api/subtitles/{id}` | 编辑字幕段 |
 | `GET` | `/api/models` | 获取模型和引擎信息 |
 
-## 环境变量
-
-项目使用 `V2S_` 前缀的环境变量，可通过 `.env` 文件或系统环境变量配置：
+### 环境变量
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
@@ -159,20 +209,65 @@ voice2Subtitle/
 | `V2S_DEFAULT_TARGET_LANG` | `zh-CN` | 翻译目标语言 |
 | `V2S_OUTPUT_MODE` | `beside_video` | SRT 导出位置 |
 
-## 支持的视频格式
+### 支持的视频格式
 
 扫描器支持：`.mp4` `.mkv` `.mov` `.avi` `.wmv` `.flv` `.webm` `.ts` `.mpg` `.mpeg` `.m4v` `.3gp` `.rmvb` `.rm`
 
 播放器支持：`.mp4` `.mkv` `.mov` `.avi` `.wmv` `.flv` `.webm` `.ts` `.mpg` `.mpeg` `.m4v` `.3gp` `.mp3` `.wav` `.aac` `.flac` `.m4a` `.ogg` `.wma`
 
-## 技术栈
+### 技术栈
 
-- **后端** — FastAPI + SQLAlchemy + SQLite (WAL) + Uvicorn
-- **前端** — React 18 + Vite + TypeScript + Lucide Icons
-- **转录** — faster-whisper / openai-whisper（双引擎自动选择）
-- **翻译** — deep-translator (Google Translate)
-- **音频** — FFmpeg
+| 层级 | 技术 |
+|------|------|
+| 后端 | FastAPI + SQLAlchemy + SQLite (WAL) + Uvicorn |
+| 前端 | React 18 + Vite + TypeScript + Lucide Icons |
+| 转录 | faster-whisper / openai-whisper（双引擎自动选择） |
+| 翻译 | deep-translator (Google Translate) |
+| 音频 | FFmpeg |
 
-## 开源协议
+---
 
-[MIT License](LICENSE)
+## 🤝 Contributing
+
+欢迎贡献！请遵循以下步骤：
+
+1. Fork 本仓库
+2. 创建功能分支 (`git checkout -b feature/amazing-feature`)
+3. 提交更改 (`git commit -m 'Add amazing feature'`)
+4. 推送分支 (`git push origin feature/amazing-feature`)
+5. 创建 Pull Request
+
+### 开发环境
+
+```bash
+git clone https://github.com/zaynzhu/voice2Subtitle.git
+cd voice2Subtitle
+
+# 后端
+cd backend
+pip install -e ".[dev]"
+python -m pytest
+
+# 前端
+cd ../frontend
+npm install
+npm run dev
+```
+
+---
+
+## ⭐ Star History
+
+<a href="https://star-history.com/#zaynzhu/voice2Subtitle&Date">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=zaynzhu/voice2Subtitle&type=Date&theme=dark" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=zaynzhu/voice2Subtitle&type=Date" />
+   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=zaynzhu/voice2Subtitle&type=Date" />
+ </picture>
+</a>
+
+---
+
+## 📄 License
+
+本项目基于 [MIT License](LICENSE) 开源 — 详见 [LICENSE](LICENSE) 文件。
