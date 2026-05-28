@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目概述
 
-Voice2Subtitle — 本地视频转字幕工作站。扫描本地视频文件夹，提取音频（FFmpeg），语音转录（Whisper 双引擎），自动翻译（Google Translate），双语字幕编辑，导出 SRT。100% 离线运行，针对低显存 GPU（如 RTX 3050Ti）优化。
+Voice2Subtitle — 本地视频转字幕工作站。扫描本地视频文件夹，提取音频（FFmpeg），语音转录（Whisper 双引擎），自动翻译（Google Translate），双语字幕编辑，视频播放器实时字幕叠加，导出 SRT。100% 离线运行，针对低显存 GPU（如 RTX 3050Ti）优化。
 
 ## 开发命令
 
@@ -66,6 +66,9 @@ backend/app/
 - **`V2S_WHISPER_MODEL=auto`** — 从 `whisper_model/` 目录自动扫描模型文件。
 - **GPU 显存释放** — `/api/media/unload-gpu` 执行 `gc.collect()` + `torch.cuda.empty_cache()`。
 - **`GET /api/models`** — 返回可用引擎、模型列表、GPU 信息，供前端显示。
+- **视频流式传输** — `GET /api/media/{id}/stream` 使用 `FileResponse`，原生支持 HTTP Range 请求。
+- **任务取消** — `POST /api/jobs/cancel` 通过 `threading.Event` 协作式取消，在流水线各阶段边界检查并抛出 `JobCancelled`。
+- **格式支持** — 扫描器支持 14 种视频格式（`.mp4` `.mkv` `.mov` `.avi` `.wmv` `.flv` `.webm` `.ts` `.mpg` `.mpeg` `.m4v` `.3gp` `.rmvb` `.rm`）。
 
 ### 前端：React SPA（单文件架构）
 
@@ -80,6 +83,8 @@ frontend/src/
 - 侧边栏模型卡片显示引擎状态（CT2/PT）和 GPU 信息。
 - 视频列表支持 checkbox 勾选批量处理，工具栏按钮分两行。
 - Toast 通知系统 + 任务进度轮询 + 项目删除确认弹窗。
+- 内置 HTML5 视频播放器，字幕实时叠加，点击字幕行跳转对应画面。
+- 终止任务按钮（`POST /api/jobs/cancel`）：取消运行中的任务 + 清空队列 + 释放 GPU。
 
 ### 数据流
 
@@ -87,7 +92,7 @@ frontend/src/
 用户选择文件夹 → Scanner 扫描视频 → 勾选视频 → 批量处理
   → SerialProcessor 串行消费
   → 探测 → 提取音频 → 转录(Whisper) → 翻译(Google) → 写入 SRT
-  → 用户编辑字幕 → 导出最终 SRT
+  → 播放器加载视频流 → 字幕实时叠加 → 用户编辑字幕 → 导出最终 SRT
 ```
 
 ## 规范
