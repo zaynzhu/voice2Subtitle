@@ -11,12 +11,12 @@ def _detect_engines() -> dict:
     try:
         import faster_whisper  # noqa: F401
         available.append("faster-whisper")
-    except ModuleNotFoundError:
+    except ImportError:
         pass
     try:
         import whisper  # noqa: F401
         available.append("openai-whisper")
-    except ModuleNotFoundError:
+    except ImportError:
         pass
     return {
         "available": available,
@@ -61,7 +61,7 @@ def list_models() -> dict:
                 "device": torch.cuda.get_device_name(0),
                 "vram_mb": round(torch.cuda.get_device_properties(0).total_memory / (1024 * 1024)),
             }
-    except ModuleNotFoundError:
+    except ImportError:
         pass
 
     return {

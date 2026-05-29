@@ -86,7 +86,7 @@ class FasterWhisperTranscriber(Transcriber):
         try:
             import importlib
             importlib.import_module("faster_whisper")
-        except ModuleNotFoundError as exc:
+        except ImportError as exc:
             raise ImportError(
                 "faster-whisper 未安装。请运行：pip install faster-whisper>=1.0.0"
             ) from exc
@@ -98,7 +98,7 @@ class FasterWhisperTranscriber(Transcriber):
             import torch  # type: ignore[import-untyped]
             if torch.cuda.is_available():
                 return "cuda"
-        except ModuleNotFoundError:
+        except ImportError:
             pass
         return "cpu"
 
@@ -179,7 +179,7 @@ class OpenAIWhisperTranscriber(Transcriber):
             try:
                 import torch  # type: ignore[import-untyped]
                 device = "cuda" if torch.cuda.is_available() else "cpu"
-            except ModuleNotFoundError:
+            except ImportError:
                 device = "cpu"
         self._device = device
         self._model_path = model_path
@@ -269,12 +269,12 @@ def create_transcriber_from_settings(settings) -> Transcriber:
     try:
         import faster_whisper  # noqa: F401
         has_faster_whisper = True
-    except ModuleNotFoundError:
+    except ImportError:
         pass
     try:
         import whisper  # noqa: F401
         has_openai_whisper = True
-    except ModuleNotFoundError:
+    except ImportError:
         pass
 
     if not has_faster_whisper and not has_openai_whisper:
@@ -287,8 +287,8 @@ def create_transcriber_from_settings(settings) -> Transcriber:
     # "auto" 模式：从 model_root 自动扫描，优先选可用引擎匹配的模型
     if model_path == "auto":
         model_root = Path(settings.model_root).resolve()
-        pt_files = list(model_root.glob("*.pt")) if model_root.is_dir() else []
-        ct2_dirs = [d for d in model_root.iterdir() if d.is_dir() and (d / "model.bin").exists()] if model_root.is_dir() else []
+        pt_files = sorted(model_root.glob("*.pt")) if model_root.is_dir() else []
+        ct2_dirs = sorted(d for d in model_root.iterdir() if d.is_dir() and (d / "model.bin").exists()) if model_root.is_dir() else []
 
         # Prefer CTranslate2 if engine available (faster, less VRAM)
         if has_faster_whisper and ct2_dirs:
@@ -335,7 +335,7 @@ def create_transcriber_from_settings(settings) -> Transcriber:
         )
     else:
         return FasterWhisperTranscriber(
-            model_name=settings.whisper_model,
+            model_name=model_path,
             device=settings.whisper_device,
             compute_type=settings.whisper_compute_type,
         )

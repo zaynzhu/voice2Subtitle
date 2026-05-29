@@ -66,12 +66,16 @@ function App() {
   const [logLines, setLogLines] = useState<string[]>(["等待连接后端。"]);
   const [busy, setBusy] = useState(false);
   const [activeJobs, setActiveJobs] = useState<Map<number, JobInfo>>(new Map());
-  const [seenJobStages, setSeenJobStages] = useState<Map<number, string>>(new Map());
+  const seenJobStagesRef = useRef<Map<number, string>>(new Map());
+  const activeProjectRef = useRef<Project | null>(null);
   const [modelsInfo, setModelsInfo] = useState<ModelsResponse | null>(null);
 
   const [toasts, setToasts] = useState<{ id: string; message: string; type: "success" | "error" | "info" }[]>([]);
 
   const videoRef = useRef<HTMLVideoElement>(null);
+  const logPanelRef = useRef<HTMLDivElement>(null);
+  useEffect(() => { activeProjectRef.current = activeProject; }, [activeProject]);
+  useEffect(() => { if (logPanelRef.current) logPanelRef.current.scrollTop = 0; }, [logLines]);
   const [currentSubtitle, setCurrentSubtitle] = useState<SubtitleSegment | null>(null);
 
   function showToast(message: string, type: "success" | "error" | "info" = "info") {
@@ -159,20 +163,30 @@ function App() {
     );
     if (!hasRunning && activeJobs.size === 0) return;
 
+    // 构建 mediaItem 查找表，避免轮询全部 mediaItems
+    const mediaItemMap = new Map(mediaItems.map((m) => [m.id, m]));
+
     const timer = setInterval(async () => {
       const nextJobs = new Map<number, JobInfo>();
       let anyRunning = false;
+      let needsRefresh = false;
 
-      for (const mediaItem of mediaItems) {
+      // 只轮询有活跃任务的 mediaItem
+      const activeMediaIds = [...activeJobs.keys()];
+
+      for (const mediaId of activeMediaIds) {
+        const mediaItem = mediaItemMap.get(mediaId);
+        if (!mediaItem) continue;
         try {
-          const jobs = await listMediaJobs(mediaItem.id);
+          const jobs = await listMediaJobs(mediaId);
           const latest = jobs[0];
           if (!latest) continue;
-          nextJobs.set(mediaItem.id, latest);
+          nextJobs.set(mediaId, latest);
 
-          const prevStage = seenJobStages.get(latest.id);
+          const seen = seenJobStagesRef.current;
+          const prevStage = seen.get(latest.id);
           if (prevStage !== latest.stage) {
-            setSeenJobStages((m) => new Map(m).set(latest.id, latest.stage));
+            seen.set(latest.id, latest.stage);
             if (latest.stage && latest.status === "running") {
               appendLog(`[${mediaItem.file_name}] ${latest.stage}${latest.progress != null ? ` (${latest.progress}%)` : ""}`);
             }
@@ -181,15 +195,15 @@ function App() {
           if (latest.status === "running" || latest.status === "queued") {
             anyRunning = true;
           } else if (latest.status === "succeeded" && prevStage !== "completed") {
-            setSeenJobStages((m) => new Map(m).set(latest.id, "completed"));
+            seen.set(latest.id, "completed");
             appendLog(`[${mediaItem.file_name}] 处理完成`);
             showToast(`${mediaItem.file_name} 处理完成`, "success");
-            if (activeProject) refreshMedia(activeProject);
+            needsRefresh = true;
           } else if (latest.status === "failed" && prevStage !== "failed") {
-            setSeenJobStages((m) => new Map(m).set(latest.id, "failed"));
+            seen.set(latest.id, "failed");
             appendLog(`[${mediaItem.file_name}] 处理失败：${latest.error_message || "未知错误"}`);
             showToast(`${mediaItem.file_name} 处理失败`, "error");
-            if (activeProject) refreshMedia(activeProject);
+            needsRefresh = true;
           }
         } catch {
           // skip unreachable media
@@ -197,6 +211,10 @@ function App() {
       }
 
       setActiveJobs(nextJobs);
+      if (needsRefresh) {
+        const proj = activeProjectRef.current;
+        if (proj) refreshMedia(proj);
+      }
       if (!anyRunning) clearInterval(timer);
     }, 3000);
 
@@ -347,7 +365,7 @@ function App() {
       if (activeProject) refreshMedia(activeProject);
       // 清除 job 轮询状态
       setActiveJobs(new Map());
-      setSeenJobStages(new Map());
+      seenJobStagesRef.current = new Map();
     } catch (error) {
       appendLog(`[系统] 终止任务失败：${error instanceof Error ? error.message : String(error)}`);
       showToast(`终止任务失败：${error instanceof Error ? error.message : String(error)}`, "error");
@@ -619,7 +637,7 @@ function App() {
             </div>
           ))}
         </div>
-        <div className="log-panel" ref={(el) => { if (el) el.scrollTop = el.scrollHeight; }}>
+        <div className="log-panel" ref={logPanelRef}>
           {logLines.map((line, index) => (
             <div key={`${line}-${index}`}>{line}</div>
           ))}

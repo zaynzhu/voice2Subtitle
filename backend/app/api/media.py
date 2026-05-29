@@ -11,12 +11,6 @@ from app.models.schemas import MediaItemRead
 
 router = APIRouter(prefix="/api", tags=["media"])
 
-STREAMABLE_EXTENSIONS = {
-    ".mp4", ".mkv", ".mov", ".avi", ".wmv", ".flv", ".webm",
-    ".ts", ".mpg", ".mpeg", ".m4v", ".3gp",
-    ".mp3", ".wav", ".aac", ".flac", ".m4a", ".ogg", ".wma",
-}
-
 MIME_MAP = {
     ".mp4": "video/mp4",
     ".mkv": "video/x-matroska",
@@ -30,6 +24,8 @@ MIME_MAP = {
     ".mpeg": "video/mpeg",
     ".m4v": "video/x-m4v",
     ".3gp": "video/3gpp",
+    ".rmvb": "application/vnd.rn-realmedia-vbr",
+    ".rm": "application/vnd.rn-realmedia",
     ".mp3": "audio/mpeg",
     ".wav": "audio/wav",
     ".aac": "audio/aac",
@@ -38,6 +34,9 @@ MIME_MAP = {
     ".ogg": "audio/ogg",
     ".wma": "audio/x-ms-wma",
 }
+
+# 从 MIME_MAP 派生，避免两套集合漂移
+STREAMABLE_EXTENSIONS = set(MIME_MAP.keys())
 
 
 @router.get("/projects/{project_id}/media", response_model=list[MediaItemRead])

@@ -1,11 +1,12 @@
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import get_session
 from app.models.entities import Job, MediaItem
-from app.services.job_pipeline import add_job_log, run_processing_pipeline
-from app.workers.processor import processor as _get_processor
+from app.services.job_pipeline import add_job_log, run_processing_pipeline, utc_now
 from app.workers.queue import job_queue
 
 router = APIRouter(prefix="/api", tags=["jobs"])
@@ -66,12 +67,14 @@ def cancel_jobs(session: Session = Depends(get_session)) -> dict:
     """取消当前正在执行的任务并清空等待队列，同时释放 GPU 显存。"""
     from app.workers.processor import processor as proc
 
-    # 1. 通知 processor 取消当前任务
+    logger = logging.getLogger(__name__)
+
+    # 1. 通知 processor 取消当前任务并清空队列
     cancel_result = {"cleared_queue": 0}
     if proc is not None:
         cancel_result = proc.cancel_current()
 
-    # 2. 将数据库中所有 running/queued 的 Job 标记为 cancelled
+    # 2. 更新数据库中 running/queued 的 Job 为 cancelled（安全网：流水线的 JobCancelled 处理器是主路径，此处兜底）
     active_jobs = list(
         session.scalars(
             select(Job).where(Job.status.in_(["running", "queued"]))
@@ -82,11 +85,13 @@ def cancel_jobs(session: Session = Depends(get_session)) -> dict:
         job.status = "cancelled"
         job.stage = "cancelled"
         job.error_message = "任务被用户主动取消"
+        job.finished_at = utc_now()
         cancelled_count += 1
 
-        # 将对应的 MediaItem 标记为 failed
         media_item = session.get(MediaItem, job.media_item_id)
-        if media_item is not None and media_item.status in ("running", "queued", "probing", "extracting_audio", "transcribing", "translating"):
+        if media_item is not None and media_item.status in (
+            "running", "queued", "probing", "extracting_audio", "transcribing", "translating",
+        ):
             media_item.status = "failed"
 
     session.commit()
@@ -104,7 +109,8 @@ def cancel_jobs(session: Session = Depends(get_session)) -> dict:
         except ImportError:
             pass
     except Exception:
-        pass
+        logger.exception("GPU 显存释放失败")
+        gpu_message = "GPU 显存释放失败（详见日志）"
 
     return {
         "cancelled_jobs": cancelled_count,

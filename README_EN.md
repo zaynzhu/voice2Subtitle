@@ -46,41 +46,55 @@ git clone https://github.com/zaynzhu/voice2Subtitle.git
 cd voice2Subtitle
 
 # Install backend dependencies
-cd backend && pip install -e ".[ml]"
+cd backend && pip install -e ".[ml]" && cd ..
 
 # Install frontend dependencies
-cd ../frontend && npm install
+cd frontend && npm install && cd ..
 
-# Launch (project root)
-cd ..
-python start-backend.py          # Backend: auto-selects best Python env
-# In another terminal
-cd frontend && npm run dev       # Frontend: http://127.0.0.1:19000
+# Launch (two terminals)
+# Terminal 1 — Backend (must run from project root)
+python start-backend.py
+
+# Terminal 2 — Frontend (must run from frontend/ directory)
+cd frontend && npm run dev
 ```
+
+Open http://127.0.0.1:19000 to use.
 
 ---
 
-## 📦 Installation
+## 📦 Startup Methods
 
-### Smart Launch Script (Recommended)
+### Method 1: Smart Launch Script (Recommended)
 
 ```bash
+# Run from project root
 python start-backend.py
 ```
 
-Automatically searches PATH and conda environments for the Python installation with the most complete engine support.
+Scans all Python installations in PATH and conda environments, checks for `faster-whisper`, `openai-whisper`, and `torch`, then launches with the most complete environment.
 
-### Manual Launch
+> [!IMPORTANT]
+> Must run `python start-backend.py` from the **project root**, not from `backend/`.
+> Running `python -m uvicorn` directly may use a Python without Whisper engines.
+
+### Method 2: Manual Launch
 
 ```bash
 # Backend (in backend/ directory)
+cd backend
 python -m uvicorn app.main:app --host 127.0.0.1 --port 19001 --reload
 
-# Frontend (in frontend/ directory)
+# Frontend (in frontend/ directory, separate terminal)
+cd frontend
 npm run dev
 ```
 
-### Production Deployment
+> [!NOTE]
+> When launching manually, ensure your current Python has `faster-whisper` or `openai-whisper` installed.
+> Verify with: `python -c "import faster_whisper; import whisper"`
+
+### Method 3: Production Deployment
 
 ```bash
 cd frontend && npm run build    # Build frontend
@@ -88,6 +102,15 @@ cd ../backend
 python -m uvicorn app.main:app --host 127.0.0.1 --port 19000
 # Backend auto-mounts frontend/dist/ as static files
 ```
+
+### Port Reference
+
+| Service | Dev Mode | Production |
+|---------|----------|------------|
+| Frontend (Vite) | `:19000` | — |
+| Backend (uvicorn) | `:19001` | `:19000` (serves frontend static files) |
+
+Vite dev mode automatically proxies `/api` requests to backend `:19001`.
 
 ### Requirements
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -14,6 +15,8 @@ from app.services.audio_extractor import extract_audio
 from app.services.media_probe import probe_media
 from app.services.subtitle_writer import write_srt
 from app.workers.processor import JobCancelled
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -90,6 +93,9 @@ def run_processing_pipeline(
         _check_cancel(cancel_event, "转录完成")
 
         add_job_log(session, job, "info", f"Transcription complete. Got {len(segments)} segments. Saving segments...")
+
+        # 在删除旧字幕前再次检查取消，避免销毁已翻译数据
+        _check_cancel(cancel_event, "保存字幕")
 
         session.execute(delete(SubtitleSegment).where(SubtitleSegment.media_item_id == media_item.id))
 
@@ -179,7 +185,11 @@ def run_processing_pipeline(
         job.finished_at = utc_now()
         media_item.status = "failed"
         add_job_log(session, job, "warning", "Job cancelled by user")
-        session.commit()
+        try:
+            session.commit()
+        except Exception:
+            session.rollback()
+            logger.exception("提交取消状态失败")
         raise
 
     except Exception as exc:
@@ -190,7 +200,11 @@ def run_processing_pipeline(
         job.finished_at = utc_now()
         media_item.status = "failed"
         add_job_log(session, job, "error", str(exc))
-        session.commit()
+        try:
+            session.commit()
+        except Exception:
+            session.rollback()
+            logger.exception("提交失败状态时发生二次异常")
         raise
 
 

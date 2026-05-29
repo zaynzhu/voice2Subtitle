@@ -115,10 +115,17 @@ class SerialProcessor:
         logger.info("SerialProcessor _worker_loop 开始运行")
 
         while self._running:
+            # 在 dequeue 前清除残留取消信号，避免毒杀新任务
+            self._cancel_event.clear()
             media_item_id = self._queue.dequeue()
 
             if media_item_id is None:
                 time.sleep(1)
+                continue
+
+            # dequeue 后再次检查：若 clear 之后、dequeue 之后有新的 cancel 到达，跳过此任务
+            if self._cancel_event.is_set():
+                logger.info("media_item_id=%d 在入队后收到取消信号，跳过", media_item_id)
                 continue
 
             logger.info("开始处理 media_item_id=%d", media_item_id)

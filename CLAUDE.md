@@ -100,7 +100,7 @@ frontend/src/
 - **Python**：snake_case，`backend/` 为工作目录。
 - **TypeScript**：camelCase 变量/函数，PascalCase 组件/类型。
 - **API 路由**：`/api/` 前缀，在 `backend/app/api/` 定义。
-- **数据库**：SQLite `data/app.sqlite3`，WAL 模式。缓存 `data/cache/`。
+- **数据库**：SQLite `data/app.sqlite3`（基于项目根绝对路径），WAL 模式。缓存 `data/cache/`。
 - **Whisper 模型**：放于项目根 `whisper_model/`（gitignored），`V2S_WHISPER_MODEL=auto` 自动扫描。
 - **前端为中文界面** — 用户可见文案均为中文。
 - **环境检测** — `start-backend.py` 自动搜索 PATH + conda 中引擎最全的 Python 环境。

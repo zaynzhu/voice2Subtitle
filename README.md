@@ -46,41 +46,55 @@ git clone https://github.com/zaynzhu/voice2Subtitle.git
 cd voice2Subtitle
 
 # 安装后端依赖
-cd backend && pip install -e ".[ml]"
+cd backend && pip install -e ".[ml]" && cd ..
 
 # 安装前端依赖
-cd ../frontend && npm install
+cd frontend && npm install && cd ..
 
-# 启动（项目根目录）
-cd ..
-python start-backend.py          # 后端：自动选择最佳 Python 环境
-# 另开终端
-cd frontend && npm run dev       # 前端：http://127.0.0.1:19000
+# 启动（两个终端）
+# 终端 1 — 后端（必须在项目根目录执行）
+python start-backend.py
+
+# 终端 2 — 前端（必须在 frontend/ 目录执行）
+cd frontend && npm run dev
 ```
+
+打开 http://127.0.0.1:19000 即可使用。
 
 ---
 
-## 📦 Installation
+## 📦 启动方式
 
-### 智能启动脚本（推荐）
+### 方式一：智能启动脚本（推荐）
 
 ```bash
+# 在项目根目录执行
 python start-backend.py
 ```
 
-自动搜索 PATH + conda 中引擎最全的 Python 环境，无需手动配置。
+脚本自动扫描 PATH、conda 环境中所有 Python，检测 `faster-whisper`、`openai-whisper`、`torch` 三个引擎，选择引擎最全的 Python 启动后端。
 
-### 手动启动
+> [!IMPORTANT]
+> 必须在**项目根目录**执行 `python start-backend.py`，不要 `cd backend` 后执行。
+> 如果直接用 `python -m uvicorn` 启动，可能用到没有 Whisper 引擎的 Python 环境。
+
+### 方式二：手动启动
 
 ```bash
-# 后端（backend/ 目录）
+# 后端（backend/ 目录下执行）
+cd backend
 python -m uvicorn app.main:app --host 127.0.0.1 --port 19001 --reload
 
-# 前端（frontend/ 目录）
+# 前端（frontend/ 目录下执行，另开终端）
+cd frontend
 npm run dev
 ```
 
-### 生产部署
+> [!NOTE]
+> 手动启动时，确保当前 Python 环境已安装 `faster-whisper` 或 `openai-whisper`。
+> 用 `python -c "import faster_whisper; import whisper"` 验证。
+
+### 方式三：生产部署
 
 ```bash
 cd frontend && npm run build    # 构建前端
@@ -88,6 +102,15 @@ cd ../backend
 python -m uvicorn app.main:app --host 127.0.0.1 --port 19000
 # 后端自动挂载 frontend/dist/ 作为静态文件
 ```
+
+### 端口说明
+
+| 服务 | 开发模式 | 生产模式 |
+|------|----------|----------|
+| 前端（Vite） | `:19000` | — |
+| 后端（uvicorn） | `:19001` | `:19000`（同时托管前端静态文件） |
+
+Vite 开发模式自动代理 `/api` 请求到后端 `:19001`。
 
 ### Requirements
 
