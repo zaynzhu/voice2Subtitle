@@ -410,7 +410,7 @@ input {
 
 .media-row {
   display: grid;
-  grid-template-columns: 20px 14px 1fr 58px 90px 80px;
+  grid-template-columns: 20px 14px 1fr 58px 120px 80px;
   align-items: center;
   gap: 10px;
   width: 100%;
@@ -427,6 +427,12 @@ input {
 
 .media-row:hover {
   background: rgba(255, 250, 240, 0.96);
+}
+
+.media-row .status-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .media-row input[type="checkbox"] {
@@ -624,6 +630,16 @@ input {
   font-family: Consolas, "Courier New", monospace;
   font-size: 13px;
   line-height: 1.8;
+}
+
+.status-text {
+  display: inline;
+}
+
+.progress-pct {
+  color: var(--accent);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
 }
 
 /* ==========================================

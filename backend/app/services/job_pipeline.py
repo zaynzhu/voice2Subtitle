@@ -40,6 +40,15 @@ def _check_cancel(cancel_event: threading.Event, stage_name: str) -> None:
         raise JobCancelled(f"任务在 {stage_name} 阶段被用户取消")
 
 
+
+
+def _commit_and_refresh(session: Session, media_item: MediaItem, job: Job) -> None:
+    """提交当前事务并刷新对象，确保短事务释放数据库锁。"""
+    session.commit()
+    session.refresh(media_item)
+    session.refresh(job)
+
+
 def run_processing_pipeline(
     session: Session,
     media_item: MediaItem,
@@ -57,33 +66,39 @@ def run_processing_pipeline(
         started_at=utc_now(),
     )
     session.add(job)
-    session.flush()
 
     try:
+        session.commit()
+        session.refresh(media_item)
         # 1. 探测媒体元数据
         _check_cancel(cancel_event, "探测")
+        logger.info("[%s] [1/5] 探测媒体元数据...", media_item.file_name)
         add_job_log(session, job, "info", f"Probing media: {media_item.file_name}")
         probe = probe_media(media_item.file_path)
         media_item.duration_ms = probe.duration_ms
         media_item.status = "probing"
-        session.flush()
+        _commit_and_refresh(session, media_item, job)
+        logger.info("[%s] [1/5] 探测完成，时长 %s ms", media_item.file_name, probe.duration_ms)
 
         # 2. 提取音频
         _check_cancel(cancel_event, "音频提取")
+        logger.info("[%s] [2/5] 提取音频...", media_item.file_name)
         audio_path = Path(settings.cache_dir) / f"{media_item.id}.mp3"
         add_job_log(session, job, "info", "Extracting audio")
         extract_audio(media_item.file_path, audio_path)
         job.stage = "ready_for_transcription"
         job.progress = 0.25
         media_item.status = "extracting_audio"
-        session.flush()
+        _commit_and_refresh(session, media_item, job)
+        logger.info("[%s] [2/5] 音频提取完成", media_item.file_name)
 
         # 3. 语音转录
         _check_cancel(cancel_event, "语音转录")
+        logger.info("[%s] [3/5] 语音转录中...", media_item.file_name)
         add_job_log(session, job, "info", "Starting speech transcription")
         job.stage = "transcribing"
         media_item.status = "transcribing"
-        session.flush()
+        _commit_and_refresh(session, media_item, job)
 
         from app.services.transcriber import create_transcriber_from_settings
         transcriber = create_transcriber_from_settings(settings)
@@ -93,6 +108,7 @@ def run_processing_pipeline(
         _check_cancel(cancel_event, "转录完成")
 
         add_job_log(session, job, "info", f"Transcription complete. Got {len(segments)} segments. Saving segments...")
+        logger.info("[%s] [3/5] 转录完成，共 %d 个片段", media_item.file_name, len(segments))
 
         # 在删除旧字幕前再次检查取消，避免销毁已翻译数据
         _check_cancel(cancel_event, "保存字幕")
@@ -115,14 +131,15 @@ def run_processing_pipeline(
         job.progress = 0.60
         job.stage = "ready_for_translation"
         media_item.status = "transcribed"
-        session.flush()
+        _commit_and_refresh(session, media_item, job)
 
         # 4. 字幕翻译
         _check_cancel(cancel_event, "翻译")
+        logger.info("[%s] [4/5] 字幕翻译中...", media_item.file_name)
         add_job_log(session, job, "info", f"Starting translation from {media_item.source_language} to {media_item.target_language}")
         job.stage = "translating"
         media_item.status = "translating"
-        session.flush()
+        _commit_and_refresh(session, media_item, job)
 
         from app.services.translator import create_translator_from_settings, TranslationRequest
         translator = create_translator_from_settings(settings)
@@ -150,19 +167,22 @@ def run_processing_pipeline(
 
         if failed_count > 0:
             add_job_log(session, job, "warning", f"Translation complete with {failed_count} segments failed")
+            logger.warning("[%s] [4/5] 翻译完成，%d 个片段失败", media_item.file_name, failed_count)
         else:
             add_job_log(session, job, "info", "Translation complete successfully")
+            logger.info("[%s] [4/5] 翻译完成", media_item.file_name)
 
         job.progress = 0.90
         job.stage = "ready_for_export"
         media_item.status = "translated"
-        session.flush()
+        _commit_and_refresh(session, media_item, job)
 
         # 5. 导出字幕为 SRT
         _check_cancel(cancel_event, "导出")
+        logger.info("[%s] [5/5] 导出 SRT 字幕...", media_item.file_name)
         add_job_log(session, job, "info", "Exporting subtitles to SRT file")
         job.stage = "exporting_subtitles"
-        session.flush()
+        _commit_and_refresh(session, media_item, job)
 
         output_srt_path = export_media_subtitles(session, media_item)
         media_item.subtitle_path = str(output_srt_path)
@@ -174,6 +194,7 @@ def run_processing_pipeline(
         job.finished_at = utc_now()
         media_item.status = "ready_for_review"
         add_job_log(session, job, "info", f"Job pipeline completed successfully. Subtitles saved to: {output_srt_path}")
+        logger.info("[%s] [完成] 全部完成！字幕已保存: %s", media_item.file_name, output_srt_path)
 
         session.commit()
         return PipelineResult(job_id=job.id, media_item_id=media_item.id, stage="completed")

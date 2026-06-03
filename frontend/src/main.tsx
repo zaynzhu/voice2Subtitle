@@ -75,7 +75,25 @@ function App() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const logPanelRef = useRef<HTMLDivElement>(null);
   useEffect(() => { activeProjectRef.current = activeProject; }, [activeProject]);
-  useEffect(() => { if (logPanelRef.current) logPanelRef.current.scrollTop = 0; }, [logLines]);
+
+  // 每秒触发重绘，让平滑进度动画生效
+  const [, setTick] = useState(0);
+  const runningJobCount = useMemo(() =>
+    [...activeJobs.values()].filter(j => j.status === "running" || j.status === "queued").length,
+    [activeJobs]
+  );
+  useEffect(() => {
+    if (runningJobCount === 0) return;
+    const id = setInterval(() => setTick(t => t + 1), 1000);
+    return () => clearInterval(id);
+  }, [runningJobCount]);
+  // 日志面板：新日志出现时自动滚到顶部（最新在上），但如果用户手动滚动过则不强制跳转
+  useEffect(() => {
+    const el = logPanelRef.current;
+    if (!el) return;
+    // scrollTop=0 表示已在顶部，允许自动滚动
+    if (el.scrollTop <= 20) el.scrollTop = 0;
+  }, [logLines]);
   const [currentSubtitle, setCurrentSubtitle] = useState<SubtitleSegment | null>(null);
 
   function showToast(message: string, type: "success" | "error" | "info" = "info") {
@@ -94,7 +112,7 @@ function App() {
   );
 
   function appendLog(line: string) {
-    setLogLines((current) => [line, ...current].slice(0, 10));
+    setLogLines((current) => [line, ...current].slice(0, 30));
   }
 
   async function refreshProjects() {
@@ -156,15 +174,66 @@ function App() {
     setEditEndMs(String(selectedSubtitle.end_ms));
   }, [selectedSubtitle?.id]);
 
+  // 平滑进度估算：在阶段进行中本地推算进度，后端真实值到达时跳转
+  const smoothProgressRef = useRef<Map<number, { stage: string; startProgress: number; targetProgress: number; startTime: number; durationSec: number }>>(new Map());
+
+  // 每个阶段的估算时长（秒）和进度区间
+  const STAGE_PROFILES: Record<string, { start: number; end: number; durationSec: number }> = {
+    probing:              { start: 0.0,  end: 0.10, durationSec: 2 },
+    extracting_audio:     { start: 0.10, end: 0.25, durationSec: 5 },
+    transcribing:         { start: 0.25, end: 0.55, durationSec: 300 },  // 5 分钟
+    transcribed:          { start: 0.55, end: 0.60, durationSec: 2 },
+    translating:          { start: 0.60, end: 0.90, durationSec: 30 },   // 30 秒
+    translated:           { start: 0.90, end: 0.95, durationSec: 2 },
+    exporting_subtitles:  { start: 0.95, end: 1.0,  durationSec: 3 },
+  };
+
+  function getSmoothProgress(mediaId: number, realProgress: number | null, stage: string): number {
+    const now = Date.now();
+    const map = smoothProgressRef.current;
+    const profile = STAGE_PROFILES[stage];
+
+    if (!profile) return realProgress ?? 0;
+
+    const existing = map.get(mediaId);
+
+    // 阶段变化 → 重置估算
+    if (!existing || existing.stage !== stage) {
+      map.set(mediaId, {
+        stage,
+        startProgress: profile.start,
+        targetProgress: profile.end,
+        startTime: now,
+        durationSec: profile.durationSec,
+      });
+      return profile.start;
+    }
+
+    // 后端返回了更高的真实值 → 直接用真实值
+    if (realProgress != null && realProgress > existing.startProgress) {
+      existing.startProgress = realProgress;
+      existing.startTime = now;
+      return realProgress;
+    }
+
+    // 本地线性插值推进
+    const elapsed = (now - existing.startTime) / 1000;
+    const ratio = Math.min(1.0, elapsed / existing.durationSec);
+    // 使用缓动函数让进度越来越慢（越接近目标越慢）
+    const eased = 1 - Math.pow(1 - ratio, 2);  // ease-out quad
+    const estimated = existing.startProgress + eased * (existing.targetProgress - existing.startProgress);
+    return Math.min(estimated, existing.targetProgress - 0.001);  // 永远不到达目标，等后端真实值
+  }
+
   // Poll active jobs for progress updates
+  const mediaItemsRef = useRef(mediaItems);
+  useEffect(() => { mediaItemsRef.current = mediaItems; }, [mediaItems]);
+
   useEffect(() => {
     const hasRunning = [...activeJobs.values()].some(
       (j) => j.status === "running" || j.status === "queued"
     );
     if (!hasRunning && activeJobs.size === 0) return;
-
-    // 构建 mediaItem 查找表，避免轮询全部 mediaItems
-    const mediaItemMap = new Map(mediaItems.map((m) => [m.id, m]));
 
     const timer = setInterval(async () => {
       const nextJobs = new Map<number, JobInfo>();
@@ -173,6 +242,7 @@ function App() {
 
       // 只轮询有活跃任务的 mediaItem
       const activeMediaIds = [...activeJobs.keys()];
+      const mediaItemMap = new Map(mediaItemsRef.current.map((m) => [m.id, m]));
 
       for (const mediaId of activeMediaIds) {
         const mediaItem = mediaItemMap.get(mediaId);
@@ -180,7 +250,15 @@ function App() {
         try {
           const jobs = await listMediaJobs(mediaId);
           const latest = jobs[0];
-          if (!latest) continue;
+          if (!latest) {
+            // Worker还没创建Job记录，保留现有的乐观queued条目
+            const existing = activeJobs.get(mediaId);
+            if (existing) {
+              nextJobs.set(mediaId, existing);
+              anyRunning = true;
+            }
+            continue;
+          }
           nextJobs.set(mediaId, latest);
 
           const seen = seenJobStagesRef.current;
@@ -188,7 +266,9 @@ function App() {
           if (prevStage !== latest.stage) {
             seen.set(latest.id, latest.stage);
             if (latest.stage && latest.status === "running") {
-              appendLog(`[${mediaItem.file_name}] ${latest.stage}${latest.progress != null ? ` (${latest.progress}%)` : ""}`);
+              // 日志显示后端真实进度
+              const realPct = latest.progress != null ? (latest.progress * 100).toFixed(1) : "?";
+              appendLog(`[${mediaItem.file_name}] ${latest.stage} (${realPct}%)`);
             }
           }
 
@@ -196,11 +276,13 @@ function App() {
             anyRunning = true;
           } else if (latest.status === "succeeded" && prevStage !== "completed") {
             seen.set(latest.id, "completed");
+            smoothProgressRef.current.delete(mediaId);
             appendLog(`[${mediaItem.file_name}] 处理完成`);
             showToast(`${mediaItem.file_name} 处理完成`, "success");
             needsRefresh = true;
           } else if (latest.status === "failed" && prevStage !== "failed") {
             seen.set(latest.id, "failed");
+            smoothProgressRef.current.delete(mediaId);
             appendLog(`[${mediaItem.file_name}] 处理失败：${latest.error_message || "未知错误"}`);
             showToast(`${mediaItem.file_name} 处理失败`, "error");
             needsRefresh = true;
@@ -219,7 +301,7 @@ function App() {
     }, 3000);
 
     return () => clearInterval(timer);
-  }, [mediaItems, activeJobs.size]);
+  }, [activeJobs.size]);
 
   function handleDeleteProject(projectId: number, event: React.MouseEvent) {
     event.stopPropagation();
@@ -303,9 +385,11 @@ function App() {
     if (ids.length === 0) return;
     setBusy(true);
     let ok = 0, fail = 0;
-    for (const id of ids) {
-      try {
-        await processMedia(id);
+    const results = await Promise.allSettled(ids.map(id => processMedia(id)));
+    for (let i = 0; i < ids.length; i++) {
+      const id = ids[i];
+      const result = results[i];
+      if (result.status === "fulfilled") {
         appendLog(`已发起处理任务 (media #${id})`);
         setActiveJobs((prev) => {
           const next = new Map(prev);
@@ -313,8 +397,8 @@ function App() {
           return next;
         });
         ok++;
-      } catch (error) {
-        appendLog(`处理失败：${error instanceof Error ? error.message : String(error)}`);
+      } else {
+        appendLog(`处理失败：${result.reason instanceof Error ? result.reason.message : String(result.reason)}`);
         fail++;
       }
     }
@@ -362,10 +446,11 @@ function App() {
       const msg = `已取消 ${result.cancelled_jobs} 个任务，清空 ${result.cleared_queue} 个排队任务。${result.gpu_released}`;
       appendLog(`[系统] ${msg}`);
       showToast("任务已终止，GPU 显存已释放", "success");
-      if (activeProject) refreshMedia(activeProject);
+      if (activeProject) await refreshMedia(activeProject);
       // 清除 job 轮询状态
       setActiveJobs(new Map());
       seenJobStagesRef.current = new Map();
+      smoothProgressRef.current.clear();
     } catch (error) {
       appendLog(`[系统] 终止任务失败：${error instanceof Error ? error.message : String(error)}`);
       showToast(`终止任务失败：${error instanceof Error ? error.message : String(error)}`, "error");
@@ -632,7 +717,17 @@ function App() {
               <span className={`status-dot ${item.status}`} />
               <span className="file-name">{item.file_name}</span>
               <span>{formatDuration(item.duration_ms)}</span>
-              <span>{item.status}</span>
+              <span className="status-text">
+                {item.status}
+                {(() => {
+                  const job = activeJobs.get(item.id);
+                  if (job && (job.status === "running" || job.status === "queued")) {
+                    const pct = (getSmoothProgress(item.id, job.progress, job.stage) * 100).toFixed(1);
+                    return <span className="progress-pct"> {pct}%</span>;
+                  }
+                  return null;
+                })()}
+              </span>
               <span>{item.subtitle_path ? "SRT" : "No subtitle"}</span>
             </div>
           ))}

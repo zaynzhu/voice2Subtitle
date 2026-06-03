@@ -2,6 +2,7 @@
 
 import importlib
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -48,6 +49,7 @@ class Translator(ABC):
         source_lang: str,
         target_lang: str,
         segments: list[TranslationRequest],
+        on_progress: Callable[[float], None] | None = None,
     ) -> list[TranslationResult]:
         """批量翻译片段列表。
 
@@ -55,6 +57,7 @@ class Translator(ABC):
             source_lang: 源语言代码，支持 "auto" 自动检测。
             target_lang: 目标语言代码，例如 "zh-CN"、"en"。
             segments: 待翻译的 TranslationRequest 列表。
+            on_progress: 可选的进度回调函数，参数为 0.0~1.0 的进度值。
 
         Returns:
             TranslationResult 列表，长度与输入 segments 完全相同，
@@ -164,6 +167,7 @@ class DeepTranslatorTranslator(Translator):
         source_lang: str,
         target_lang: str,
         segments: list[TranslationRequest],
+        on_progress: Callable[[float], None] | None = None,
     ) -> list[TranslationResult]:
         """逐条翻译片段列表。
 
@@ -171,14 +175,22 @@ class DeepTranslatorTranslator(Translator):
             source_lang: 源语言代码，支持 "auto" 自动检测。
             target_lang: 目标语言代码，例如 "zh-CN"、"en"。
             segments: 待翻译的 TranslationRequest 列表。
+            on_progress: 可选的进度回调函数，参数为 0.0~1.0 的进度值。
 
         Returns:
             TranslationResult 列表，长度与输入 segments 完全相同。
         """
         results: list[TranslationResult] = []
-        for segment in segments:
+        total = len(segments)
+        for idx, segment in enumerate(segments, start=1):
             result = self._translate_one(source_lang, target_lang, segment)
             results.append(result)
+            # 报告进度
+            if on_progress and total > 0:
+                try:
+                    on_progress(idx / total)
+                except Exception:
+                    pass  # 进度回调失败不应中断翻译
         return results
 
 

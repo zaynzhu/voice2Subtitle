@@ -22,7 +22,7 @@ SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 def configure_sqlite(dbapi_connection, _connection_record) -> None:
     cursor = dbapi_connection.cursor()
     cursor.execute("PRAGMA journal_mode=WAL")
-    cursor.execute("PRAGMA busy_timeout=5000")
+    cursor.execute("PRAGMA busy_timeout=10000")
     cursor.close()
 
 

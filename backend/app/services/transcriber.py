@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -29,11 +30,18 @@ class Transcriber(ABC):
     """转录器抽象基类，所有转录后端均须实现此接口。"""
 
     @abstractmethod
-    def transcribe(self, audio_path: str | Path) -> list[TranscriptSegment]:
+    def transcribe(
+        self,
+        audio_path: str | Path,
+        on_progress: Callable[[float], None] | None = None,
+        total_duration_ms: int | None = None,
+    ) -> list[TranscriptSegment]:
         """对给定音频文件执行语音转录。
 
         Args:
             audio_path: 待转录的音频文件路径。
+            on_progress: 可选的进度回调函数，参数为 0.0~1.0 的进度值。
+            total_duration_ms: 音频总时长（毫秒），用于计算进度百分比。
 
         Returns:
             按顺序排列的 TranscriptSegment 列表。
@@ -116,11 +124,18 @@ class FasterWhisperTranscriber(Transcriber):
     # 公开接口
     # ------------------------------------------------------------------
 
-    def transcribe(self, audio_path: str | Path) -> list[TranscriptSegment]:
+    def transcribe(
+        self,
+        audio_path: str | Path,
+        on_progress: Callable[[float], None] | None = None,
+        total_duration_ms: int | None = None,
+    ) -> list[TranscriptSegment]:
         """对音频文件执行转录并返回片段列表。
 
         Args:
             audio_path: 待转录的音频文件路径。
+            on_progress: 可选的进度回调函数，参数为 0.0~1.0 的进度值。
+            total_duration_ms: 音频总时长（毫秒），用于计算进度百分比。
 
         Returns:
             按时间顺序排列的 TranscriptSegment 列表。
@@ -157,6 +172,14 @@ class FasterWhisperTranscriber(Transcriber):
                     confidence=confidence,
                 )
             )
+
+            # 报告进度：基于当前片段的结束时间
+            if on_progress and total_duration_ms and total_duration_ms > 0:
+                try:
+                    progress = min(1.0, end_ms / total_duration_ms)
+                    on_progress(progress)
+                except Exception:
+                    pass  # 进度回调失败不应中断转录
 
         return result
 
@@ -201,7 +224,12 @@ class OpenAIWhisperTranscriber(Transcriber):
             download_root=download_root,
         )
 
-    def transcribe(self, audio_path: str | Path) -> list[TranscriptSegment]:
+    def transcribe(
+        self,
+        audio_path: str | Path,
+        on_progress: Callable[[float], None] | None = None,
+        total_duration_ms: int | None = None,
+    ) -> list[TranscriptSegment]:
         """对音频文件执行转录并返回片段列表。"""
         if self._model is None:
             self._load_model()
@@ -218,6 +246,7 @@ class OpenAIWhisperTranscriber(Transcriber):
         segments = result.get("segments", [])
 
         result_segments: list[TranscriptSegment] = []
+        total = len(segments)
         for idx, seg in enumerate(segments, start=1):
             start_ms = int(round(seg["start"] * 1000))
             end_ms = int(round(seg["end"] * 1000))
@@ -238,6 +267,10 @@ class OpenAIWhisperTranscriber(Transcriber):
                     confidence=confidence,
                 )
             )
+
+            # 报告进度
+            if on_progress and total > 0:
+                on_progress(idx / total)
 
         return result_segments
 

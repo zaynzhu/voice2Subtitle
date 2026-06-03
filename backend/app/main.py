@@ -1,7 +1,17 @@
 import logging
+import sys
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+
+# 配置 root logger，使所有模块日志输出到终端（不覆盖已有的 uvicorn handler）
+if not logging.getLogger().handlers:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        stream=sys.stdout,
+    )
+logger = logging.getLogger(__name__)
 
 from app.api import exports, health, jobs, media, models, projects, subtitle_edits, subtitles
 from app.db import SessionLocal, init_db
@@ -27,16 +37,16 @@ def create_app() -> FastAPI:
         global _processor
         # 初始化数据库表结构
         init_db()
+        logger.info("数据库初始化完成")
         # 初始化串行 Worker 处理器
         _processor = init_processor(SessionLocal)
         # 恢复上次异常中断的 Job
         recovered = _processor.recover_interrupted_jobs()
         if recovered:
-            logging.getLogger(__name__).warning(
-                "恢复了 %d 个被中断的 job", recovered
-            )
+            logger.warning("恢复了 %d 个被中断的 job", recovered)
         # 启动后台 worker 线程
         _processor.start()
+        logger.info("后台处理器已启动")
 
     @app.on_event("shutdown")
     def on_shutdown() -> None:
