@@ -14,6 +14,7 @@ Voice2Subtitle — 本地视频转字幕工作站。扫描本地视频文件夹�
 pip install -e ".[ml]"          # 安装（含 ML 依赖）
 python -m pytest                 # 运行全部测试
 python -m pytest tests/test_x.py # 运行单个测试
+python -m pytest tests/test_api_validations.py tests/test_translator_rate_limiter.py # 校验与限频相关测试
 ```
 
 ### 前端（在 `frontend/` 目录下执行）
@@ -24,19 +25,18 @@ npm run dev    # Vite 开发服务器 127.0.0.1:19000，代理 /api → :19001
 npm run build  # tsc && vite build → frontend/dist/
 ```
 
-### 全栈启动（推荐）
+### 全栈启动
 
 ```bash
 # 项目根目录下，自动选择最完整的 Python 环境（检测 Anaconda 等）
 python start-backend.py
 ```
 
-手动方式：
+> ⚠️ **后端必须通过 `start-backend.py` 启动**，禁止直接 `python -m uvicorn`。`start-backend.py` 会自动搜索 PATH + conda 中引擎最全的 Python 环境，直接 uvicorn 可能用了缺少 ML 依赖的 Python，导致模型加载失败。
+
 ```bash
-# 后端（在 backend/ 下）
-python -m uvicorn app.main:app --host 127.0.0.1 --port 19001 --reload
 # 前端（在 frontend/ 下）
-npm run dev
+npm run dev    # Vite 开发服务器 127.0.0.1:19000，代理 /api → :19001
 ```
 
 生产部署：先 `npm run build`，后端启动在 19000 — FastAPI 挂载 `frontend/dist/` 作为静态文件。
@@ -54,7 +54,7 @@ backend/app/
 ├── models/          # entities.py（ORM），schemas.py（Pydantic）
 ├── services/
 │   ├── transcriber.py      # 双引擎工厂：自动检测可用引擎，优先 CTranslate2
-│   ├── job_pipeline.py     # 编排：探测 → 提取 → 转录 → 翻译 → 写入
+│   ├── job_pipeline.py     # 编排：探测 → 提取 → 转录 → 翻译 → 写入，含阶段进度持久化
 │   └── ...                 # scanner, audio_extractor, media_probe, translator, subtitle_writer
 ├── workers/
 │   ├── queue.py      # 内存 FIFO（deque + Lock），不持久化
@@ -68,6 +68,9 @@ backend/app/
 - **`GET /api/models`** — 返回可用引擎、模型列表、GPU 信息，供前端显示。
 - **视频流式传输** — `GET /api/media/{id}/stream` 使用 `FileResponse`，原生支持 HTTP Range 请求。
 - **任务取消** — `POST /api/jobs/cancel` 通过 `threading.Event` 协作式取消，在流水线各阶段边界检查并抛出 `JobCancelled`。
+- **平滑任务进度** — 转录与翻译阶段通过 `on_progress` 回调写入真实进度，并以 2 秒间隔节流数据库提交，前端再做本地平滑估算。
+- **翻译限频** — `translator.py` 内置 `RateLimiter`，Google Translate 连续请求间隔不低于 2 秒；空文本直接跳过，不触发外部 API。
+- **输入校验** — 创建项目会校验媒体目录存在；字幕编辑要求 `end_ms > start_ms`；没有字幕段时拒绝导出 SRT。
 - **格式支持** — 扫描器支持 14 种视频格式（`.mp4` `.mkv` `.mov` `.avi` `.wmv` `.flv` `.webm` `.ts` `.mpg` `.mpeg` `.m4v` `.3gp` `.rmvb` `.rm`）。
 
 ### 前端：React SPA（单文件架构）
@@ -83,6 +86,7 @@ frontend/src/
 - 侧边栏模型卡片显示引擎状态（CT2/PT）和 GPU 信息。
 - 视频列表支持 checkbox 勾选批量处理，工具栏按钮分两行。
 - Toast 通知系统 + 任务进度轮询 + 项目删除确认弹窗。
+- 终端日志会高亮错误/警告，失败任务在视频列表中保留错误摘要。
 - 内置 HTML5 视频播放器，字幕实时叠加，点击字幕行跳转对应画面。
 - 终止任务按钮（`POST /api/jobs/cancel`）：取消运行中的任务 + 清空队列 + 释放 GPU。
 
