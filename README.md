@@ -2,7 +2,7 @@
 
 # 🐍 Voice2Subtitle
 
-本地视频转字幕工作站 — 100% 离线运行
+本地视频转字幕工作站 — 本地转录与字幕编辑
 
 [English](README_EN.md) | [中文](README.md)
 
@@ -22,15 +22,17 @@
 > [!TIP]
 > 扫描本地视频文件夹，自动提取音频、语音转录（Whisper 双引擎）、翻译、生成双语字幕。
 > 内置视频播放器实时叠加字幕，支持手动编辑后导出标准 SRT。针对低显存 GPU 优化，RTX 3050Ti 4GB 即可流畅运行。
+> 转录在本机运行；默认翻译使用 Google Translate，需要可访问外部翻译服务。
 
 ---
 
 ## ✨ Features
 
 - **双引擎语音转录** — 自动检测 `faster-whisper`（CTranslate2）和 `openai-whisper`（PyTorch .pt）可用性，匹配本地模型格式
-- **自动翻译** — 接入 Google Translate，支持多语言互译，异常句自动跳过不中断流程
+- **自动翻译** — 接入 Google Translate，支持多语言互译，连续请求内置 2 秒限频，异常句自动跳过不中断流程
+- **平滑进度与错误提示** — 转录/翻译阶段写入真实进度，前端平滑显示；终端和视频列表会突出失败原因
 - **视频播放器** — 内置 HTML5 播放器，支持 12+ 视频格式，字幕实时叠加显示，点击字幕跳转对应画面
-- **字幕编辑** — 双语字幕列表，支持手动修改原文/译文/最终文本，优先级覆盖
+- **字幕编辑** — 双语字幕列表，支持手动修改原文/译文/最终文本，自动校验字幕时间范围
 - **批量处理** — 串行任务队列，支持勾选多个视频批量投递，可中途终止任务
 - **GPU 显存管理** — 一键释放显存，支持低显存环境（如 RTX 3050Ti 4GB）
 - **任务取消** — 随时终止正在运行的转录任务，清除队列，释放 GPU 资源
@@ -78,7 +80,7 @@ python start-backend.py
 > 必须在**项目根目录**执行 `python start-backend.py`，不要 `cd backend` 后执行。
 > 如果直接用 `python -m uvicorn` 启动，可能用到没有 Whisper 引擎的 Python 环境。
 
-### 方式二：手动启动
+### 方式二：手动启动（仅限已确认 Python 环境）
 
 ```bash
 # 后端（backend/ 目录下执行）
@@ -91,7 +93,7 @@ npm run dev
 ```
 
 > [!NOTE]
-> 手动启动时，确保当前 Python 环境已安装 `faster-whisper` 或 `openai-whisper`。
+> 手动启动只适合已经确认当前 Python 环境包含 Whisper 引擎的情况。
 > 用 `python -c "import faster_whisper; import whisper"` 验证。
 
 ### 方式三：生产部署
@@ -143,13 +145,13 @@ whisper_model/
 1. 启动后打开 http://127.0.0.1:19000
 2. 点击「新建项目」，选择本地视频文件夹
 3. 勾选要处理的视频，点击「批量处理」
-4. 等待转录完成，视频播放器中实时查看字幕
+4. 等待转录完成，视频列表会平滑显示进度；失败时终端和任务行会显示错误原因
 
 ### 编辑字幕并导出
 
 1. 在播放器中点击字幕行跳转到对应画面
-2. 右侧字幕列表中直接编辑原文或译文
-3. 点击「导出 SRT」保存到视频同级目录
+2. 右侧字幕列表中直接编辑原文或译文，保存时会校验结束时间必须晚于开始时间
+3. 点击「导出 SRT」保存到视频同级目录；没有字幕段时会拒绝导出并提示原因
 
 ### GPU 显存管理
 
@@ -190,7 +192,7 @@ voice2Subtitle/
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | `GET` | `/api/projects` | 获取项目列表 |
-| `POST` | `/api/projects` | 创建项目 |
+| `POST` | `/api/projects` | 创建项目（校验媒体目录存在） |
 | `DELETE` | `/api/projects/{id}` | 删除项目 |
 | `POST` | `/api/projects/{id}/scan` | 扫描视频文件 |
 | `POST` | `/api/projects/browse` | 打开文件夹选择对话框 |
@@ -203,7 +205,7 @@ voice2Subtitle/
 | `GET` | `/api/media/{id}` | 获取视频详情 |
 | `GET` | `/api/media/{id}/stream` | 流式传输视频（支持 Range 请求） |
 | `POST` | `/api/media/{id}/process` | 提交处理任务 |
-| `POST` | `/api/media/{id}/export` | 导出 SRT 文件 |
+| `POST` | `/api/media/{id}/export` | 导出 SRT 文件（无字幕段时拒绝导出） |
 | `POST` | `/api/media/unload-gpu` | 释放 GPU 显存 |
 
 #### 任务与字幕
@@ -213,7 +215,7 @@ voice2Subtitle/
 | `GET` | `/api/media/{id}/jobs` | 获取任务列表 |
 | `POST` | `/api/jobs/cancel` | 终止任务并释放 GPU |
 | `GET` | `/api/media/{id}/subtitles` | 获取字幕段列表 |
-| `PATCH` | `/api/subtitles/{id}` | 编辑字幕段 |
+| `PATCH` | `/api/subtitles/{id}` | 编辑字幕段（校验时间范围） |
 | `GET` | `/api/models` | 获取模型和引擎信息 |
 
 ### 环境变量
@@ -245,7 +247,7 @@ voice2Subtitle/
 | 后端 | FastAPI + SQLAlchemy + SQLite (WAL) + Uvicorn |
 | 前端 | React 18 + Vite + TypeScript + Lucide Icons |
 | 转录 | faster-whisper / openai-whisper（双引擎自动选择） |
-| 翻译 | deep-translator (Google Translate) |
+| 翻译 | deep-translator (Google Translate，2 秒限频) |
 | 音频 | FFmpeg |
 
 ---
@@ -270,6 +272,7 @@ cd voice2Subtitle
 cd backend
 pip install -e ".[dev]"
 python -m pytest
+python -m pytest tests/test_api_validations.py tests/test_translator_rate_limiter.py
 
 # 前端
 cd ../frontend
