@@ -1,6 +1,8 @@
 ﻿from __future__ import annotations
 
 import importlib
+import threading
+import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -8,6 +10,36 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from app.config import Settings
+
+GOOGLE_TRANSLATE_MIN_INTERVAL_SEC = 2.0
+
+
+class RateLimiter:
+    """限制同一外部服务连续请求的最小间隔。"""
+
+    def __init__(
+        self,
+        min_interval_sec: float,
+        *,
+        monotonic: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], None] = time.sleep,
+    ) -> None:
+        self._min_interval_sec = min_interval_sec
+        self._monotonic = monotonic
+        self._sleep = sleep
+        self._lock = threading.Lock()
+        self._last_call_at: float | None = None
+
+    def wait(self) -> None:
+        with self._lock:
+            now = self._monotonic()
+            if self._last_call_at is not None:
+                elapsed = now - self._last_call_at
+                if elapsed < self._min_interval_sec:
+                    self._sleep(self._min_interval_sec - elapsed)
+                    now = self._monotonic()
+
+            self._last_call_at = now
 
 
 # ---------------------------------------------------------------------------
@@ -87,6 +119,7 @@ class DeepTranslatorTranslator(Translator):
         # 检查可选依赖是否可用
         self._check_dependency()
         self._service = service
+        self._rate_limiter = RateLimiter(GOOGLE_TRANSLATE_MIN_INTERVAL_SEC)
 
     # ------------------------------------------------------------------
     # 内部辅助方法
@@ -130,6 +163,7 @@ class DeepTranslatorTranslator(Translator):
         try:
             from deep_translator import GoogleTranslator  # type: ignore[import-untyped]
 
+            self._rate_limiter.wait()
             translated = GoogleTranslator(
                 source=source_lang,
                 target=target_lang,
@@ -208,4 +242,3 @@ def create_translator_from_settings(settings: Settings) -> Translator:
         配置好的 DeepTranslatorTranslator 实例（固定使用 Google 服务）。
     """
     return DeepTranslatorTranslator()
-

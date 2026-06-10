@@ -18,6 +18,9 @@ class SubtitleEditPayload(BaseModel):
 
 @router.patch("/subtitles/{segment_id}")
 def update_subtitle(segment_id: int, payload: SubtitleEditPayload, session: Session = Depends(get_session)) -> dict:
+    if payload.end_ms <= payload.start_ms:
+        raise HTTPException(status_code=400, detail="结束时间必须晚于开始时间")
+
     segment = session.get(SubtitleSegment, segment_id)
     if segment is None:
         raise HTTPException(status_code=404, detail="Subtitle segment not found")

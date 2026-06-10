@@ -1,8 +1,10 @@
-from app.config import settings
+from pathlib import Path
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.db import get_session
 from app.models.entities import Project
 from app.models.schemas import ProjectCreate, ProjectRead, ScanResult
@@ -18,9 +20,13 @@ def list_projects(session: Session = Depends(get_session)) -> list[Project]:
 
 @router.post("", response_model=ProjectRead)
 def create_project(payload: ProjectCreate, session: Session = Depends(get_session)) -> Project:
+    media_root = Path(payload.media_root).expanduser()
+    if not media_root.exists() or not media_root.is_dir():
+        raise HTTPException(status_code=400, detail=f"媒体目录不存在或不是文件夹：{payload.media_root}")
+
     project = Project(
         name=payload.name,
-        media_root=payload.media_root,
+        media_root=str(media_root.resolve()),
         output_mode=payload.output_mode,
     )
     session.add(project)
@@ -87,5 +93,3 @@ def delete_project(project_id: int, session: Session = Depends(get_session)):
     session.delete(project)
     session.commit()
     return {"message": "Project deleted successfully", "id": project_id}
-
-
