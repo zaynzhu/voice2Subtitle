@@ -48,6 +48,41 @@ function formatTimestamp(ms: number): string {
     .padStart(2, "0")}.${millis.toString().padStart(3, "0")}`;
 }
 
+const STAGE_LABELS: Record<string, string> = {
+  queued: "排队中",
+  probing: "探测媒体",
+  extracting_audio: "提取音频",
+  ready_for_transcription: "准备转录",
+  transcribing: "语音转录",
+  transcribed: "转录完成",
+  ready_for_translation: "准备翻译",
+  translating: "字幕翻译",
+  translated: "翻译完成",
+  ready_for_export: "准备导出",
+  exporting_subtitles: "导出字幕",
+  completed: "已完成",
+  ready_for_review: "可校对",
+  failed: "失败",
+  cancelled: "已取消",
+  interrupted: "已中断",
+  new: "未处理",
+  exported: "已导出"
+};
+
+function getStageLabel(stage: string | null | undefined): string {
+  if (!stage) return "未知状态";
+  return STAGE_LABELS[stage] ?? stage;
+}
+
+function getLogLineClass(line: string): string {
+  const lower = line.toLowerCase();
+  if (line.includes("失败") || line.includes("错误") || lower.includes("failed") || lower.includes("error")) {
+    return "log-line error";
+  }
+  if (line.includes("警告") || lower.includes("warning")) return "log-line warning";
+  return "log-line";
+}
+
 function App() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [activeProject, setActiveProject] = useState<Project | null>(null);
@@ -74,6 +109,7 @@ function App() {
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const logPanelRef = useRef<HTMLDivElement>(null);
+  const lastJobPollErrorAtRef = useRef(0);
   useEffect(() => { activeProjectRef.current = activeProject; }, [activeProject]);
 
   // 每秒触发重绘，让平滑进度动画生效
@@ -101,7 +137,7 @@ function App() {
     setToasts((current) => [...current, { id, message, type }]);
     setTimeout(() => {
       setToasts((current) => current.filter((t) => t.id !== id));
-    }, 3500);
+    }, type === "error" ? 8000 : 3500);
   }
 
   const [deletingProjectId, setDeletingProjectId] = useState<number | null>(null);
@@ -181,10 +217,13 @@ function App() {
   const STAGE_PROFILES: Record<string, { start: number; end: number; durationSec: number }> = {
     probing:              { start: 0.0,  end: 0.10, durationSec: 2 },
     extracting_audio:     { start: 0.10, end: 0.25, durationSec: 5 },
-    transcribing:         { start: 0.25, end: 0.55, durationSec: 300 },  // 5 分钟
-    transcribed:          { start: 0.55, end: 0.60, durationSec: 2 },
+    ready_for_transcription: { start: 0.25, end: 0.25, durationSec: 1 },
+    transcribing:         { start: 0.25, end: 0.60, durationSec: 300 },  // 5 分钟
+    transcribed:          { start: 0.60, end: 0.60, durationSec: 1 },
+    ready_for_translation: { start: 0.60, end: 0.60, durationSec: 1 },
     translating:          { start: 0.60, end: 0.90, durationSec: 30 },   // 30 秒
     translated:           { start: 0.90, end: 0.95, durationSec: 2 },
+    ready_for_export:     { start: 0.90, end: 0.95, durationSec: 2 },
     exporting_subtitles:  { start: 0.95, end: 1.0,  durationSec: 3 },
   };
 
@@ -268,7 +307,7 @@ function App() {
             if (latest.stage && latest.status === "running") {
               // 日志显示后端真实进度
               const realPct = latest.progress != null ? (latest.progress * 100).toFixed(1) : "?";
-              appendLog(`[${mediaItem.file_name}] ${latest.stage} (${realPct}%)`);
+              appendLog(`[${mediaItem.file_name}] ${getStageLabel(latest.stage)} (${realPct}%)`);
             }
           }
 
@@ -283,12 +322,17 @@ function App() {
           } else if (latest.status === "failed" && prevStage !== "failed") {
             seen.set(latest.id, "failed");
             smoothProgressRef.current.delete(mediaId);
-            appendLog(`[${mediaItem.file_name}] 处理失败：${latest.error_message || "未知错误"}`);
-            showToast(`${mediaItem.file_name} 处理失败`, "error");
+            const errorMessage = latest.error_message || "未知错误";
+            appendLog(`[${mediaItem.file_name}] 处理失败：${errorMessage}`);
+            showToast(`${mediaItem.file_name} 处理失败：${errorMessage}`, "error");
             needsRefresh = true;
           }
-        } catch {
-          // skip unreachable media
+        } catch (error) {
+          const now = Date.now();
+          if (now - lastJobPollErrorAtRef.current > 10000) {
+            lastJobPollErrorAtRef.current = now;
+            appendLog(`[系统] 获取任务状态失败：${error instanceof Error ? error.message : String(error)}`);
+          }
         }
       }
 
@@ -694,47 +738,56 @@ function App() {
         </div>
 
         <div className="media-list">
-          {mediaItems.map((item) => (
-            <div
-              className={item.id === activeMedia?.id ? "media-row active" : "media-row"}
-              key={item.id}
-              onClick={() => setActiveMedia(item)}
-            >
-              <input
-                type="checkbox"
-                checked={selectedMediaIds.has(item.id)}
-                onChange={(e) => {
-                  e.stopPropagation();
-                  setSelectedMediaIds((prev) => {
-                    const next = new Set(prev);
-                    if (next.has(item.id)) next.delete(item.id);
-                    else next.add(item.id);
-                    return next;
-                  });
-                }}
-                onClick={(e) => e.stopPropagation()}
-              />
-              <span className={`status-dot ${item.status}`} />
-              <span className="file-name">{item.file_name}</span>
-              <span>{formatDuration(item.duration_ms)}</span>
-              <span className="status-text">
-                {item.status}
-                {(() => {
-                  const job = activeJobs.get(item.id);
-                  if (job && (job.status === "running" || job.status === "queued")) {
-                    const pct = (getSmoothProgress(item.id, job.progress, job.stage) * 100).toFixed(1);
-                    return <span className="progress-pct"> {pct}%</span>;
-                  }
-                  return null;
-                })()}
-              </span>
-              <span>{item.subtitle_path ? "SRT" : "No subtitle"}</span>
-            </div>
-          ))}
+          {mediaItems.map((item) => {
+            const job = activeJobs.get(item.id);
+            const isFailed = item.status === "failed" || job?.status === "failed";
+            const rowClassName = [
+              "media-row",
+              item.id === activeMedia?.id ? "active" : "",
+              isFailed ? "failed" : ""
+            ].filter(Boolean).join(" ");
+            const errorMessage = job?.status === "failed" ? job.error_message || "未知错误" : "";
+
+            return (
+              <div
+                className={rowClassName}
+                key={item.id}
+                onClick={() => setActiveMedia(item)}
+              >
+                <input
+                  type="checkbox"
+                  checked={selectedMediaIds.has(item.id)}
+                  onChange={(e) => {
+                    e.stopPropagation();
+                    setSelectedMediaIds((prev) => {
+                      const next = new Set(prev);
+                      if (next.has(item.id)) next.delete(item.id);
+                      else next.add(item.id);
+                      return next;
+                    });
+                  }}
+                  onClick={(e) => e.stopPropagation()}
+                />
+                <span className={`status-dot ${isFailed ? "failed" : item.status}`} />
+                <span className="file-name">
+                  <span>{item.file_name}</span>
+                  {errorMessage && <span className="media-error">{errorMessage}</span>}
+                </span>
+                <span>{formatDuration(item.duration_ms)}</span>
+                <span className="status-text">
+                  {getStageLabel(job?.status === "running" || job?.status === "queued" ? job.stage : item.status)}
+                  {job && (job.status === "running" || job.status === "queued") && (
+                    <span className="progress-pct"> {(getSmoothProgress(item.id, job.progress, job.stage) * 100).toFixed(1)}%</span>
+                  )}
+                </span>
+                <span>{item.subtitle_path ? "SRT" : "No subtitle"}</span>
+              </div>
+            );
+          })}
         </div>
         <div className="log-panel" ref={logPanelRef}>
           {logLines.map((line, index) => (
-            <div key={`${line}-${index}`}>{line}</div>
+            <div className={getLogLineClass(line)} key={`${line}-${index}`}>{line}</div>
           ))}
         </div>
       </section>

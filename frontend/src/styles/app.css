@@ -429,6 +429,15 @@ input {
   background: rgba(255, 250, 240, 0.96);
 }
 
+.media-row.failed {
+  border-color: rgba(189, 91, 44, 0.55);
+  background: rgba(255, 237, 226, 0.9);
+}
+
+.media-row.failed.active {
+  background: #f6d9c8;
+}
+
 .media-row .status-text {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -443,10 +452,23 @@ input {
 }
 
 .file-name {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 650;
+}
+
+.file-name > span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-weight: 650;
+}
+
+.media-error {
+  color: var(--warning);
+  font-size: 11px;
+  font-weight: 600;
 }
 
 .status-dot {
@@ -458,6 +480,19 @@ input {
 
 .status-dot.new {
   background: var(--warning);
+}
+
+.status-dot.failed {
+  background: var(--warning);
+  box-shadow: 0 0 0 3px rgba(189, 91, 44, 0.15);
+}
+
+.status-dot.queued,
+.status-dot.probing,
+.status-dot.extracting_audio,
+.status-dot.transcribing,
+.status-dot.translating {
+  background: #b98528;
 }
 
 .status-dot.exported,
@@ -630,6 +665,23 @@ input {
   font-family: Consolas, "Courier New", monospace;
   font-size: 13px;
   line-height: 1.8;
+}
+
+.log-line {
+  border-left: 3px solid transparent;
+  padding-left: 8px;
+}
+
+.log-line.error {
+  color: #ffd1bf;
+  border-left-color: var(--warning);
+  background: rgba(189, 91, 44, 0.16);
+}
+
+.log-line.warning {
+  color: #ffe1a6;
+  border-left-color: #b98528;
+  background: rgba(185, 133, 40, 0.14);
 }
 
 .status-text {
@@ -890,5 +942,4 @@ input {
   border-color: #c0392b;
   color: #fff;
 }
-
 

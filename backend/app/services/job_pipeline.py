@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -17,6 +19,8 @@ from app.services.subtitle_writer import write_srt
 from app.workers.processor import JobCancelled
 
 logger = logging.getLogger(__name__)
+
+PROGRESS_UPDATE_INTERVAL_SEC = 2.0
 
 
 @dataclass(frozen=True)
@@ -49,6 +53,48 @@ def _commit_and_refresh(session: Session, media_item: MediaItem, job: Job) -> No
     session.refresh(job)
 
 
+def _make_progress_reporter(
+    session: Session,
+    job: Job,
+    stage_start: float,
+    stage_end: float,
+) -> Callable[[float], None]:
+    """创建阶段进度回调，按固定间隔把局部进度映射到总进度。"""
+    last_progress = max(job.progress or 0.0, stage_start)
+    last_commit_at = time.monotonic() - PROGRESS_UPDATE_INTERVAL_SEC
+    disabled = False
+
+    def report(local_progress: float) -> None:
+        nonlocal last_progress, last_commit_at, disabled
+        if disabled:
+            return
+
+        ratio = min(1.0, max(0.0, local_progress))
+        next_progress = stage_start + (stage_end - stage_start) * ratio
+        next_progress = max(last_progress, min(stage_end, next_progress))
+        now = time.monotonic()
+
+        if next_progress <= last_progress:
+            return
+        if next_progress < stage_end and now - last_commit_at < PROGRESS_UPDATE_INTERVAL_SEC:
+            return
+
+        job.progress = next_progress
+        try:
+            session.commit()
+            session.refresh(job)
+        except Exception:
+            session.rollback()
+            disabled = True
+            logger.exception("更新任务进度失败，后续进度回调将被忽略")
+            return
+
+        last_progress = next_progress
+        last_commit_at = now
+
+    return report
+
+
 def run_processing_pipeline(
     session: Session,
     media_item: MediaItem,
@@ -77,6 +123,7 @@ def run_processing_pipeline(
         probe = probe_media(media_item.file_path)
         media_item.duration_ms = probe.duration_ms
         media_item.status = "probing"
+        job.progress = 0.10
         _commit_and_refresh(session, media_item, job)
         logger.info("[%s] [1/5] 探测完成，时长 %s ms", media_item.file_name, probe.duration_ms)
 
@@ -85,10 +132,12 @@ def run_processing_pipeline(
         logger.info("[%s] [2/5] 提取音频...", media_item.file_name)
         audio_path = Path(settings.cache_dir) / f"{media_item.id}.mp3"
         add_job_log(session, job, "info", "Extracting audio")
+        job.stage = "extracting_audio"
+        media_item.status = "extracting_audio"
+        _commit_and_refresh(session, media_item, job)
         extract_audio(media_item.file_path, audio_path)
         job.stage = "ready_for_transcription"
         job.progress = 0.25
-        media_item.status = "extracting_audio"
         _commit_and_refresh(session, media_item, job)
         logger.info("[%s] [2/5] 音频提取完成", media_item.file_name)
 
@@ -102,7 +151,11 @@ def run_processing_pipeline(
 
         from app.services.transcriber import create_transcriber_from_settings
         transcriber = create_transcriber_from_settings(settings)
-        segments = transcriber.transcribe(audio_path)
+        segments = transcriber.transcribe(
+            audio_path,
+            on_progress=_make_progress_reporter(session, job, 0.25, 0.60),
+            total_duration_ms=media_item.duration_ms,
+        )
 
         # 转录完成后再次检查取消（转录本身不可中断，但后续步骤可以跳过）
         _check_cancel(cancel_event, "转录完成")
@@ -153,6 +206,7 @@ def run_processing_pipeline(
             source_lang=media_item.source_language,
             target_lang=media_item.target_language,
             segments=translation_requests,
+            on_progress=_make_progress_reporter(session, job, 0.60, 0.90),
         )
 
         failed_count = 0
